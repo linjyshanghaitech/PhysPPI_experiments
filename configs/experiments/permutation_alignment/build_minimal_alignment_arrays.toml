@@ -5,9 +5,9 @@ name = "permutation-alignment"
 run_name = "build-minimal-arrays-v1"
 module = "experiments.permutation_alignment.build_minimal_alignment_arrays"
 args = [
-  "--colabfold-dir", "${MSA_CACHE}/colabfold_msas",
-  "--mapping-dir", "${MSA_CACHE}/colabfold_msas/mappings",
-  "--output-dir", "${OUTPUT_ROOT}/experiments/permutation_alignment/build-minimal-arrays-v1",
+  "--colabfold-dir", "${PHYSPPI_MSA_CACHE}/colabfold_msas",
+  "--mapping-dir", "${PHYSPPI_MSA_CACHE}/colabfold_msas/mappings",
+  "--output-dir", "${PHYSPPI_OUTPUT_ROOT}/experiments/permutation_alignment/build-minimal-arrays-v1",
 ]
 
 [slurm]
@@ -15,18 +15,18 @@ profile = "configs/slurm/cpu_debug.toml"
 job_name = "ppi-minimal-arrays"
 
 [artifacts]
-output_dir = "${OUTPUT_ROOT}/experiments/permutation_alignment/build-minimal-arrays-v1"
+output_dir = "${PHYSPPI_OUTPUT_ROOT}/experiments/permutation_alignment/build-minimal-arrays-v1"
 
 [environment]
 required = [
-  "MSA_CACHE",
-  "OUTPUT_ROOT",
+  "PHYSPPI_MSA_CACHE",
+  "PHYSPPI_OUTPUT_ROOT",
 ]
 
 [validation]
 required_files = [
-  "${MSA_CACHE}/colabfold_msas/mappings/rep_id_to_seq.json",
+  "${PHYSPPI_MSA_CACHE}/colabfold_msas/mappings/rep_id_to_seq.json",
 ]
 required_directories = [
-  "${MSA_CACHE}/colabfold_msas/main",
+  "${PHYSPPI_MSA_CACHE}/colabfold_msas/main",
 ]

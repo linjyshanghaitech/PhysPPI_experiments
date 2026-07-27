@@ -19,8 +19,8 @@ import that package; production package code must never import `scripts`.
 Export the roots required by the selected committed TOML, then prepare a run:
 
 ```bash
-MSA_CACHE=/path/to/msa-cache \
-OUTPUT_ROOT=/path/to/output \
+PHYSPPI_MSA_CACHE=/path/to/msa-cache \
+PHYSPPI_OUTPUT_ROOT=/path/to/output \
 .pixi/envs/openfold3-cpu/bin/python \
   scripts/physppi/submit_experiment.py \
   configs/experiments/permutation_alignment/build_minimal_alignment_arrays.toml
@@ -33,6 +33,8 @@ Apply machine-specific scheduler or environment values only through an
 explicit local override:
 
 ```bash
+PHYSPPI_MSA_CACHE=/path/to/msa-cache \
+PHYSPPI_OUTPUT_ROOT=/path/to/output \
 .pixi/envs/openfold3-cpu/bin/python \
   scripts/physppi/submit_experiment.py \
   configs/experiments/permutation_alignment/build_minimal_alignment_arrays.toml \
@@ -42,6 +44,8 @@ explicit local override:
 Submit only by adding `--submit`:
 
 ```bash
+PHYSPPI_MSA_CACHE=/path/to/msa-cache \
+PHYSPPI_OUTPUT_ROOT=/path/to/output \
 .pixi/envs/openfold3-cpu/bin/python \
   scripts/physppi/submit_experiment.py \
   configs/experiments/permutation_alignment/build_minimal_alignment_arrays.toml \

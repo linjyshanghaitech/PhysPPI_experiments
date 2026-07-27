@@ -5,16 +5,16 @@ name = "permutation-alignment"
 run_name = "audit-v1-v32-data-errors-v1"
 module = "experiments.permutation_alignment.audit_v1_v32_data_errors"
 args = [
-  "--qbiolip-root", "${QBIOLIP_ROOT}",
-  "--afdb-root", "${AFDB_ROOT}",
-  "--qbiolip-index-cache", "${FORMAL_ROOT}/reader-index-cache/qbiolip10k-v1.pkl",
-  "--afdb-index-cache", "${FORMAL_ROOT}/reader-index-cache/afdb10k-v1.pkl",
-  "--qbiolip-canonical-report", "${FORMAL_ROOT}/manifests/qbiolip-audit.json",
-  "--afdb-canonical-report", "${FORMAL_ROOT}/manifests/afdb-audit.json",
-  "--training-manifest", "${FORMAL_ROOT}/manifests/formal-manifest.json",
-  "--runtime-ledger", "${FORMAL_ROOT}/manifests/runtime-failure-ledger.jsonl",
+  "--qbiolip-root", "${PHYSPPI_QBIOLIP_ROOT}",
+  "--afdb-root", "${PHYSPPI_AFDB_ROOT}",
+  "--qbiolip-index-cache", "${PHYSPPI_FORMAL_ROOT}/reader-index-cache/qbiolip10k-v1.pkl",
+  "--afdb-index-cache", "${PHYSPPI_FORMAL_ROOT}/reader-index-cache/afdb10k-v1.pkl",
+  "--qbiolip-canonical-report", "${PHYSPPI_FORMAL_ROOT}/manifests/qbiolip-audit.json",
+  "--afdb-canonical-report", "${PHYSPPI_FORMAL_ROOT}/manifests/afdb-audit.json",
+  "--training-manifest", "${PHYSPPI_FORMAL_ROOT}/manifests/formal-manifest.json",
+  "--runtime-ledger", "${PHYSPPI_FORMAL_ROOT}/manifests/runtime-failure-ledger.jsonl",
   "--surface-neighbors", "128",
-  "--output", "${OUTPUT_ROOT}/experiments/permutation_alignment/audit-v1-v32-data-errors-v1/data-error-ids.json",
+  "--output", "${PHYSPPI_OUTPUT_ROOT}/experiments/permutation_alignment/audit-v1-v32-data-errors-v1/data-error-ids.json",
 ]
 
 [slurm]
@@ -22,27 +22,27 @@ profile = "configs/slurm/cpu_debug.toml"
 job_name = "ppi-v1-v32-audit"
 
 [artifacts]
-output_dir = "${OUTPUT_ROOT}/experiments/permutation_alignment/audit-v1-v32-data-errors-v1"
+output_dir = "${PHYSPPI_OUTPUT_ROOT}/experiments/permutation_alignment/audit-v1-v32-data-errors-v1"
 
 [environment]
 required = [
-  "QBIOLIP_ROOT",
-  "AFDB_ROOT",
-  "FORMAL_ROOT",
-  "OUTPUT_ROOT",
+  "PHYSPPI_QBIOLIP_ROOT",
+  "PHYSPPI_AFDB_ROOT",
+  "PHYSPPI_FORMAL_ROOT",
+  "PHYSPPI_OUTPUT_ROOT",
 ]
 
 [validation]
 required_files = [
-  "${FORMAL_ROOT}/reader-index-cache/qbiolip10k-v1.pkl",
-  "${FORMAL_ROOT}/reader-index-cache/afdb10k-v1.pkl",
-  "${FORMAL_ROOT}/manifests/qbiolip-audit.json",
-  "${FORMAL_ROOT}/manifests/afdb-audit.json",
-  "${FORMAL_ROOT}/manifests/formal-manifest.json",
-  "${FORMAL_ROOT}/manifests/runtime-failure-ledger.jsonl",
+  "${PHYSPPI_FORMAL_ROOT}/reader-index-cache/qbiolip10k-v1.pkl",
+  "${PHYSPPI_FORMAL_ROOT}/reader-index-cache/afdb10k-v1.pkl",
+  "${PHYSPPI_FORMAL_ROOT}/manifests/qbiolip-audit.json",
+  "${PHYSPPI_FORMAL_ROOT}/manifests/afdb-audit.json",
+  "${PHYSPPI_FORMAL_ROOT}/manifests/formal-manifest.json",
+  "${PHYSPPI_FORMAL_ROOT}/manifests/runtime-failure-ledger.jsonl",
 ]
 required_directories = [
-  "${QBIOLIP_ROOT}",
-  "${AFDB_ROOT}",
-  "${FORMAL_ROOT}",
+  "${PHYSPPI_QBIOLIP_ROOT}",
+  "${PHYSPPI_AFDB_ROOT}",
+  "${PHYSPPI_FORMAL_ROOT}",
 ]

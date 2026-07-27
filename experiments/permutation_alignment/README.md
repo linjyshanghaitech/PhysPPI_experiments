@@ -10,9 +10,9 @@ repository root.
 | `experiments.permutation_alignment.audit_v1_v32_data_errors` | `configs/experiments/permutation_alignment/audit_v1_v32_data_errors.toml` | `audit-v1-v32-data-errors-v1/data-error-ids.json` |
 
 Each output path is relative to
-`${OUTPUT_ROOT}/experiments/permutation_alignment/`. The committed TOML files
-declare every required external input; machine-specific roots are supplied by
-environment variables.
+`${PHYSPPI_OUTPUT_ROOT}/experiments/permutation_alignment/`. The committed TOML
+files declare every required external input; machine-specific roots are
+supplied by environment variables.
 
 Every conclusion drawn from these experiments must cite the core implementation
 commit that was evaluated. A configuration commit alone is insufficient to

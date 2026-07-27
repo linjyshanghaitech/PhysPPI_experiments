@@ -5,12 +5,12 @@ name = "permutation-alignment"
 run_name = "audit-protected-chain-matching-v1"
 module = "experiments.permutation_alignment.audit_protected_chain_matching"
 args = [
-  "--runtime-ledger", "${FORMAL_ROOT}/manifests/runtime-failure-ledger.jsonl",
-  "--qbiolip-root", "${QBIOLIP_ROOT}",
-  "--afdb-root", "${AFDB_ROOT}",
-  "--formal-root", "${FORMAL_ROOT}",
-  "--components-cif", "${COMPONENTS_CIF}",
-  "--output", "${OUTPUT_ROOT}/experiments/permutation_alignment/audit-protected-chain-matching-v1/audit.jsonl",
+  "--runtime-ledger", "${PHYSPPI_FORMAL_ROOT}/manifests/runtime-failure-ledger.jsonl",
+  "--qbiolip-root", "${PHYSPPI_QBIOLIP_ROOT}",
+  "--afdb-root", "${PHYSPPI_AFDB_ROOT}",
+  "--formal-root", "${PHYSPPI_FORMAL_ROOT}",
+  "--components-cif", "${PHYSPPI_COMPONENTS_CIF}",
+  "--output", "${PHYSPPI_OUTPUT_ROOT}/experiments/permutation_alignment/audit-protected-chain-matching-v1/audit.jsonl",
 ]
 
 [slurm]
@@ -18,27 +18,29 @@ profile = "configs/slurm/cpu_debug.toml"
 job_name = "ppi-protected-audit"
 
 [artifacts]
-output_dir = "${OUTPUT_ROOT}/experiments/permutation_alignment/audit-protected-chain-matching-v1"
+output_dir = "${PHYSPPI_OUTPUT_ROOT}/experiments/permutation_alignment/audit-protected-chain-matching-v1"
 
 [environment]
 required = [
-  "QBIOLIP_ROOT",
-  "AFDB_ROOT",
-  "FORMAL_ROOT",
-  "COMPONENTS_CIF",
-  "OUTPUT_ROOT",
+  "PHYSPPI_QBIOLIP_ROOT",
+  "PHYSPPI_AFDB_ROOT",
+  "PHYSPPI_FORMAL_ROOT",
+  "PHYSPPI_COMPONENTS_CIF",
+  "PHYSPPI_OUTPUT_ROOT",
 ]
 
 [validation]
 required_files = [
-  "${FORMAL_ROOT}/manifests/runtime-failure-ledger.jsonl",
-  "${COMPONENTS_CIF}",
-  "${FORMAL_ROOT}/manifests/qbiolip-audit.json",
-  "${FORMAL_ROOT}/manifests/afdb-audit.json",
-  "${FORMAL_ROOT}/audits/v1-v32-full-20k-data-errors/data-error-ids.json",
+  "${PHYSPPI_FORMAL_ROOT}/manifests/runtime-failure-ledger.jsonl",
+  "${PHYSPPI_COMPONENTS_CIF}",
+  "${PHYSPPI_FORMAL_ROOT}/reader-index-cache/qbiolip10k-v1.pkl",
+  "${PHYSPPI_FORMAL_ROOT}/reader-index-cache/afdb10k-v1.pkl",
+  "${PHYSPPI_FORMAL_ROOT}/manifests/qbiolip-audit.json",
+  "${PHYSPPI_FORMAL_ROOT}/manifests/afdb-audit.json",
+  "${PHYSPPI_FORMAL_ROOT}/audits/v1-v32-full-20k-data-errors/data-error-ids.json",
 ]
 required_directories = [
-  "${QBIOLIP_ROOT}",
-  "${AFDB_ROOT}",
-  "${FORMAL_ROOT}",
+  "${PHYSPPI_QBIOLIP_ROOT}",
+  "${PHYSPPI_AFDB_ROOT}",
+  "${PHYSPPI_FORMAL_ROOT}",
 ]

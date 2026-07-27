@@ -5,9 +5,9 @@ not-yet-stable research workflows.
 
 ## Dependency direction
 
-- Experiments may use public APIs from `openfold3`.
-- Stable commands in `scripts/physppi` and reusable code in `openfold3` must
-  not import `experiments`.
+- `experiments` may import public APIs from `openfold3`.
+- `scripts/physppi` may import entry points from `experiments` and public APIs
+  from `openfold3`.
 - `openfold3` must never import `experiments` or `scripts`.
 - Experiment entry points own only experiment orchestration and provisional
   logic; stable reusable behavior belongs below them.

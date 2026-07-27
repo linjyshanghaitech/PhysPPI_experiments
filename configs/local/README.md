@@ -5,6 +5,8 @@ ignored by Git. They are never discovered automatically. Load one explicitly
 with `--local-config`:
 
 ```bash
+PHYSPPI_MSA_CACHE=/path/to/msa-cache \
+PHYSPPI_OUTPUT_ROOT=/path/to/output \
 python scripts/physppi/submit_experiment.py \
   configs/experiments/permutation_alignment/build_minimal_alignment_arrays.toml \
   --local-config configs/local/example.toml
@@ -28,10 +30,10 @@ memory = "64G"
 time = "04:00:00"
 
 [environment]
-required = ["OUTPUT_ROOT"]
+required = ["PHYSPPI_MSA_CACHE", "PHYSPPI_OUTPUT_ROOT"]
 
 [environment.export]
-EXAMPLE_CACHE = "/path/to/local/cache"
+PHYSPPI_SITE_CACHE = "/path/to/local/cache"
 ```
 
 Allowed Slurm keys are `partition`, `account`, `qos`, `nodes`,

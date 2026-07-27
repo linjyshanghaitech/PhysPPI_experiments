@@ -52,29 +52,46 @@ def _make_real_config_inputs(tmp_path: Path) -> dict[str, str]:
     _touch(msa_cache / "colabfold_msas/mappings/rep_id_to_seq.json")
 
     return {
-        "QBIOLIP_ROOT": str(qbiolip_root),
-        "AFDB_ROOT": str(afdb_root),
-        "FORMAL_ROOT": str(formal_root),
-        "COMPONENTS_CIF": str(components_cif),
-        "MSA_CACHE": str(msa_cache),
-        "OUTPUT_ROOT": str(output_root),
+        "PHYSPPI_QBIOLIP_ROOT": str(qbiolip_root),
+        "PHYSPPI_AFDB_ROOT": str(afdb_root),
+        "PHYSPPI_FORMAL_ROOT": str(formal_root),
+        "PHYSPPI_COMPONENTS_CIF": str(components_cif),
+        "PHYSPPI_MSA_CACHE": str(msa_cache),
+        "PHYSPPI_OUTPUT_ROOT": str(output_root),
     }
 
 
 @pytest.mark.parametrize(
-    ("config_name", "run_name"),
+    ("config_name", "run_name", "required_environment"),
     [
         (
             "audit_protected_chain_matching.toml",
             "audit-protected-chain-matching-v1",
+            {
+                "PHYSPPI_QBIOLIP_ROOT",
+                "PHYSPPI_AFDB_ROOT",
+                "PHYSPPI_FORMAL_ROOT",
+                "PHYSPPI_COMPONENTS_CIF",
+                "PHYSPPI_OUTPUT_ROOT",
+            },
         ),
         (
             "build_minimal_alignment_arrays.toml",
             "build-minimal-arrays-v1",
+            {
+                "PHYSPPI_MSA_CACHE",
+                "PHYSPPI_OUTPUT_ROOT",
+            },
         ),
         (
             "audit_v1_v32_data_errors.toml",
             "audit-v1-v32-data-errors-v1",
+            {
+                "PHYSPPI_QBIOLIP_ROOT",
+                "PHYSPPI_AFDB_ROOT",
+                "PHYSPPI_FORMAL_ROOT",
+                "PHYSPPI_OUTPUT_ROOT",
+            },
         ),
     ],
 )
@@ -82,6 +99,7 @@ def test_real_permutation_alignment_config_loads(
     tmp_path: Path,
     config_name: str,
     run_name: str,
+    required_environment: set[str],
 ) -> None:
     environ = _make_real_config_inputs(tmp_path)
     config_path = REPO_ROOT / "configs/experiments/permutation_alignment" / config_name
@@ -98,12 +116,86 @@ def test_real_permutation_alignment_config_loads(
     )
     assert loaded.config.experiment.run_name == run_name
     assert loaded.config.openfold is None
+    assert set(loaded.config.environment.required) == required_environment
     assert loaded.profile_path == REPO_ROOT / "configs/slurm/cpu_debug.toml"
     assert loaded.config.artifacts.output_dir.is_relative_to(
-        Path(environ["OUTPUT_ROOT"])
+        Path(environ["PHYSPPI_OUTPUT_ROOT"])
     )
     assert "/101045/" not in config_path.read_text()
     assert "/101045/" not in loaded.profile_path.read_text()
+
+
+@pytest.mark.parametrize(
+    ("config_name", "required_environment"),
+    [
+        (
+            "audit_protected_chain_matching.toml",
+            {
+                "PHYSPPI_QBIOLIP_ROOT",
+                "PHYSPPI_AFDB_ROOT",
+                "PHYSPPI_FORMAL_ROOT",
+                "PHYSPPI_COMPONENTS_CIF",
+                "PHYSPPI_OUTPUT_ROOT",
+            },
+        ),
+        (
+            "build_minimal_alignment_arrays.toml",
+            {
+                "PHYSPPI_MSA_CACHE",
+                "PHYSPPI_OUTPUT_ROOT",
+            },
+        ),
+        (
+            "audit_v1_v32_data_errors.toml",
+            {
+                "PHYSPPI_QBIOLIP_ROOT",
+                "PHYSPPI_AFDB_ROOT",
+                "PHYSPPI_FORMAL_ROOT",
+                "PHYSPPI_OUTPUT_ROOT",
+            },
+        ),
+    ],
+)
+def test_real_permutation_alignment_config_uses_physppi_environment_namespace(
+    config_name: str,
+    required_environment: set[str],
+) -> None:
+    config_path = REPO_ROOT / "configs/experiments/permutation_alignment" / config_name
+    source = config_path.read_text()
+    raw = tomllib.loads(source)
+    placeholders = set(re.findall(r"\$\{([A-Z_][A-Z0-9_]*)\}", source))
+
+    assert set(raw["environment"]["required"]) == required_environment
+    assert placeholders == required_environment
+    assert all(name.startswith("PHYSPPI_") for name in placeholders)
+
+
+@pytest.mark.parametrize(
+    "cache_name",
+    ["qbiolip10k-v1.pkl", "afdb10k-v1.pkl"],
+)
+def test_protected_chain_config_requires_reader_index_caches(
+    tmp_path: Path,
+    cache_name: str,
+) -> None:
+    environ = _make_real_config_inputs(tmp_path)
+    missing_cache = (
+        Path(environ["PHYSPPI_FORMAL_ROOT"]) / "reader-index-cache" / cache_name
+    )
+    missing_cache.unlink()
+    config_path = (
+        REPO_ROOT
+        / "configs/experiments/permutation_alignment"
+        / "audit_protected_chain_matching.toml"
+    )
+
+    with pytest.raises(ValueError, match=cache_name):
+        load_experiment(
+            config_path,
+            repo_root=REPO_ROOT,
+            environ=environ,
+            validate_module=True,
+        )
 
 
 @pytest.mark.parametrize(
