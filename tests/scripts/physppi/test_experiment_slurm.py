@@ -1038,6 +1038,36 @@ def test_submit_run_redacts_command_and_export_secrets_and_cleans_stderr(
     assert error["stderr"].endswith("before<redacted><redacted>after")
 
 
+def test_submit_run_redacts_command_for_public_prepared_run_constructor(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "public-prepared-run"
+    run_dir.mkdir()
+    script_path = run_dir / "job.sbatch"
+    script_path.write_text("#!/bin/bash\n")
+    command_secret = "command-secret"
+    prepared = PreparedRun(
+        run_dir,
+        script_path,
+        ("python", "--token", command_secret),
+    )
+    runner = Mock(
+        return_value=subprocess.CompletedProcess(
+            args=["sbatch"],
+            returncode=1,
+            stdout="",
+            stderr=f"rejected token {command_secret}",
+        )
+    )
+
+    with pytest.raises(RuntimeError):
+        submit_run(prepared, runner=runner)
+
+    serialized = (run_dir / "submission-error.json").read_text()
+    assert command_secret not in serialized
+    assert json.loads(serialized)["stderr"] == "rejected token <redacted>"
+
+
 def test_submit_run_redaction_does_not_rewrite_its_placeholder(
     tmp_path: Path,
 ) -> None:

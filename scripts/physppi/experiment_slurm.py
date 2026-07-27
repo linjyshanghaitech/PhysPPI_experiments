@@ -314,11 +314,13 @@ def _scalar_redactions(value: object) -> set[str]:
 
 def _clean_submission_stderr(prepared: PreparedRun, stderr: str) -> str:
     cleaned = "".join(character for character in stderr if character.isprintable())
+    raw_secrets = {part for part in prepared.command if part}
+    raw_secrets.update(prepared._redactions)
     secrets = tuple(
         sorted(
             {
                 "".join(character for character in secret if character.isprintable())
-                for secret in prepared._redactions
+                for secret in raw_secrets
             }
             - {""},
             key=lambda value: (-len(value), value),
