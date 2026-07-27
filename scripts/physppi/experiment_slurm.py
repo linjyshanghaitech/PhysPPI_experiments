@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -10,6 +13,7 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +48,20 @@ _LOCAL_SLURM_FIELDS = (
     "memory",
     "time",
 )
+_SBATCH_SAFE_ATOM = re.compile(r"[A-Za-z0-9_./:@%+=,-]+\Z")
+_AT_FDCWD = -100
+_RENAME_NOREPLACE = 1
+_LIBC = ctypes.CDLL(None, use_errno=True)
+_RENAMEAT2 = getattr(_LIBC, "renameat2", None)
+if _RENAMEAT2 is not None:
+    _RENAMEAT2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    _RENAMEAT2.restype = ctypes.c_int
 
 
 @dataclass(frozen=True)
@@ -66,6 +84,13 @@ def build_command(
     )
 
 
+def _render_sbatch_directive(name: str, value: object) -> str:
+    rendered = str(value)
+    if _SBATCH_SAFE_ATOM.fullmatch(rendered) is None:
+        raise ValueError(f"unsafe Slurm directive value for {name}")
+    return f"#SBATCH --{name}={rendered}"
+
+
 def render_sbatch(
     config: ExperimentConfig,
     *,
@@ -86,9 +111,7 @@ def render_sbatch(
     )
 
     lines = ["#!/usr/bin/env bash"]
-    lines.extend(
-        f"#SBATCH --{name}={shlex.quote(str(value))}" for name, value in directives
-    )
+    lines.extend(_render_sbatch_directive(name, value) for name, value in directives)
     lines.extend(
         [
             "",
@@ -192,9 +215,41 @@ def _write_json(path: Path, value: Any) -> None:
     _write_text(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
-def _copy_file(source: Path, destination: Path) -> None:
-    with source.open("rb") as source_handle:
-        _write_bytes(destination, source_handle.read())
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _rename_noreplace(source: Path, destination: Path) -> None:
+    if _RENAMEAT2 is None:
+        raise OSError(errno.ENOSYS, "renameat2 is unavailable")
+
+    ctypes.set_errno(0)
+    result = _RENAMEAT2(
+        _AT_FDCWD,
+        os.fsencode(source),
+        _AT_FDCWD,
+        os.fsencode(destination),
+        _RENAME_NOREPLACE,
+    )
+    if result == 0:
+        return
+
+    error_number = ctypes.get_errno()
+    if error_number == errno.EEXIST:
+        raise FileExistsError(
+            error_number,
+            os.strerror(error_number),
+            destination,
+        )
+    raise OSError(
+        error_number,
+        os.strerror(error_number),
+        destination,
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -231,8 +286,8 @@ def prepare_run(
     try:
         experiment_archive = temporary_dir / "experiment.toml"
         profile_archive = temporary_dir / "slurm-profile.toml"
-        _copy_file(loaded.experiment_path, experiment_archive)
-        _copy_file(loaded.profile_path, profile_archive)
+        _write_bytes(experiment_archive, loaded.experiment_source.content)
+        _write_bytes(profile_archive, loaded.profile_source.content)
 
         config_sha256 = {
             "experiment.toml": _sha256(experiment_archive),
@@ -240,8 +295,9 @@ def prepare_run(
         }
 
         if loaded.local_path is not None:
-            with loaded.local_path.open("rb") as handle:
-                raw_local = tomllib.load(handle)
+            if loaded.local_source is None:
+                raise ValueError("local source snapshot is missing")
+            raw_local = tomllib.load(BytesIO(loaded.local_source.content))
             local_archive = temporary_dir / "local-overrides.redacted.toml"
             _write_text(local_archive, render_redacted_local(raw_local))
             config_sha256["local-overrides.redacted.toml"] = _sha256(local_archive)
@@ -280,11 +336,15 @@ def prepare_run(
             },
         )
 
-        if output_dir.exists():
-            raise FileExistsError(output_dir)
-        os.replace(temporary_dir, output_dir)
-    except BaseException:
-        shutil.rmtree(temporary_dir, ignore_errors=True)
+        _fsync_directory(temporary_dir)
+        _rename_noreplace(temporary_dir, output_dir)
+        _fsync_directory(output_dir.parent)
+    except BaseException as failure:
+        if temporary_dir.exists():
+            try:
+                shutil.rmtree(temporary_dir)
+            except BaseException as cleanup_failure:
+                raise cleanup_failure from failure
         raise
 
     return PreparedRun(

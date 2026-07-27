@@ -1,3 +1,4 @@
+import errno
 import hashlib
 import json
 import shlex
@@ -7,7 +8,12 @@ from unittest.mock import Mock, call
 
 import pytest
 
-from scripts.physppi.experiment_config import LoadedExperiment, load_experiment
+import scripts.physppi.experiment_slurm as experiment_slurm
+from scripts.physppi.experiment_config import (
+    ArtifactsSection,
+    LoadedExperiment,
+    load_experiment,
+)
 from scripts.physppi.experiment_slurm import (
     build_command,
     git_state,
@@ -53,7 +59,7 @@ def _write_loaded_experiment(
     if runner_yaml:
         runner.write_text("trainer:\n  precision: bf16\n")
 
-    output_dir = root / "outputs" / "run one"
+    output_dir = root / "outputs" / "run-one"
     experiment_lines = [
         "schema_version = 1",
         "[experiment]",
@@ -201,13 +207,16 @@ def test_render_sbatch_quotes_repo_exports_and_command(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo with spaces"
     repo_root.mkdir()
     loaded = _write_loaded_experiment(repo_root)
+    config = loaded.config.model_copy(
+        update={"artifacts": ArtifactsSection(output_dir=tmp_path / "safe-output")}
+    )
     command = build_command(
-        loaded.config,
+        config,
         python_executable=Path("/opt/python env/bin/python"),
     )
 
     rendered = render_sbatch(
-        loaded.config,
+        config,
         repo_root=repo_root,
         python_executable=Path("/opt/python env/bin/python"),
     )
@@ -220,6 +229,69 @@ def test_render_sbatch_quotes_repo_exports_and_command(tmp_path: Path) -> None:
     )
     assert f"exec {shlex.join(command)}" in rendered
     assert "\ntouch nope\n" not in rendered
+
+
+@pytest.mark.parametrize(
+    "unsafe_job_name",
+    [
+        r"audit\run",
+        'audit "run one"',
+        "audit#comment",
+        "audit\n#SBATCH --account=attacker",
+    ],
+)
+def test_render_sbatch_rejects_unsafe_directive_atoms(
+    tmp_path: Path,
+    unsafe_job_name: str,
+) -> None:
+    loaded = _write_loaded_experiment(tmp_path)
+    config = loaded.config.model_copy(
+        update={
+            "slurm": loaded.config.slurm.model_copy(
+                update={"job_name": unsafe_job_name}
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="job-name"):
+        render_sbatch(
+            config,
+            repo_root=tmp_path,
+            python_executable=Path("/usr/bin/python3"),
+        )
+
+
+def test_render_sbatch_rejects_output_paths_with_spaces(tmp_path: Path) -> None:
+    loaded = _write_loaded_experiment(tmp_path)
+    config = loaded.config.model_copy(
+        update={
+            "artifacts": ArtifactsSection(output_dir=tmp_path / "output with spaces")
+        }
+    )
+
+    with pytest.raises(ValueError, match="output"):
+        render_sbatch(
+            config,
+            repo_root=tmp_path,
+            python_executable=Path("/usr/bin/python3"),
+        )
+
+
+def test_render_sbatch_emits_only_expected_safe_directives(tmp_path: Path) -> None:
+    loaded = _write_loaded_experiment(tmp_path, all_resources=True)
+
+    rendered = render_sbatch(
+        loaded.config,
+        repo_root=tmp_path,
+        python_executable=Path("/usr/bin/python3"),
+    )
+
+    directives = [line for line in rendered.splitlines() if line.startswith("#SBATCH")]
+    assert len(directives) == 12
+    assert all(
+        "'" not in directive and '"' not in directive for directive in directives
+    )
+    assert directives[0] == "#SBATCH --job-name=audit-run"
 
 
 def test_prepare_run_writes_exact_prepared_files_without_submission(
@@ -377,6 +449,60 @@ def test_prepare_run_metadata_records_hashes_git_argv_and_utc(
     assert (prepared.run_dir / "command.json").read_text().endswith("\n")
 
 
+def test_prepare_run_uses_toml_bytes_captured_during_load(tmp_path: Path) -> None:
+    loaded = _write_loaded_experiment(tmp_path, local=True)
+    experiment_bytes = loaded.experiment_source.content
+    profile_bytes = loaded.profile_source.content
+    assert loaded.local_source is not None
+    assert loaded.experiment_source.path == loaded.experiment_path
+    assert loaded.profile_source.path == loaded.profile_path
+    assert loaded.local_source.path == loaded.local_path
+    assert loaded.config.slurm.account == "secret-account"
+    assert loaded.config.slurm.nodes == 3
+
+    loaded.experiment_path.write_text("replaced experiment\n")
+    loaded.profile_path.unlink()
+    assert loaded.local_path is not None
+    loaded.local_path.unlink()
+
+    prepared = prepare_run(
+        loaded,
+        repo_root=tmp_path,
+        python_executable=Path("/usr/bin/python3"),
+        git_commit="3" * 40,
+        git_dirty=False,
+    )
+
+    assert (prepared.run_dir / "experiment.toml").read_bytes() == experiment_bytes
+    assert (prepared.run_dir / "slurm-profile.toml").read_bytes() == profile_bytes
+    with (prepared.run_dir / "local-overrides.redacted.toml").open("rb") as handle:
+        redacted = tomllib.load(handle)
+    assert redacted["slurm"] == {
+        "account": "<redacted>",
+        "nodes": "<redacted>",
+    }
+    assert redacted["environment"]["export"] == {
+        "API_TOKEN": "<redacted>",
+        "EMPTY_SECRET": "<redacted>",
+    }
+    assert (
+        "secret-account"
+        not in (prepared.run_dir / "local-overrides.redacted.toml").read_text()
+    )
+    metadata = json.loads((prepared.run_dir / "prepared.json").read_text())
+    assert (
+        metadata["config_sha256"]["experiment.toml"]
+        == hashlib.sha256(experiment_bytes).hexdigest()
+    )
+    assert (
+        metadata["config_sha256"]["slurm-profile.toml"]
+        == hashlib.sha256(profile_bytes).hexdigest()
+    )
+    assert metadata["config_sha256"]["local-overrides.redacted.toml"] == _sha256(
+        prepared.run_dir / "local-overrides.redacted.toml"
+    )
+
+
 def test_prepare_run_cleans_temp_directory_after_injected_write_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -401,6 +527,165 @@ def test_prepare_run_cleans_temp_directory_after_injected_write_failure(
     assert not loaded.config.artifacts.output_dir.exists()
     assert output_parent.is_dir()
     assert list(output_parent.iterdir()) == []
+
+
+def test_prepare_run_surfaces_cleanup_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _write_loaded_experiment(tmp_path)
+    monkeypatch.setattr(
+        experiment_slurm,
+        "_write_json",
+        Mock(side_effect=OSError("injected write failure")),
+    )
+
+    def fail_unless_errors_are_ignored(
+        path: Path,
+        *,
+        ignore_errors: bool = False,
+    ) -> None:
+        if not ignore_errors:
+            raise OSError(f"injected cleanup failure: {path}")
+
+    monkeypatch.setattr(
+        experiment_slurm.shutil,
+        "rmtree",
+        fail_unless_errors_are_ignored,
+    )
+
+    with pytest.raises(OSError, match="cleanup failure") as error:
+        prepare_run(
+            loaded,
+            repo_root=tmp_path,
+            python_executable=Path("/usr/bin/python3"),
+            git_commit="7" * 40,
+            git_dirty=False,
+        )
+
+    assert error.value.__cause__ is not None
+    assert "write failure" in str(error.value.__cause__)
+
+
+def test_prepare_run_does_not_replace_target_created_at_publish_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _write_loaded_experiment(tmp_path)
+    output_dir = loaded.config.artifacts.output_dir
+    output_parent = output_dir.parent
+    real_fsync_directory = experiment_slurm._fsync_directory
+    target_inode: int | None = None
+
+    def create_competing_target(path: Path) -> None:
+        nonlocal target_inode
+        if path != output_parent:
+            output_dir.mkdir()
+            target_inode = output_dir.stat().st_ino
+        real_fsync_directory(path)
+
+    monkeypatch.setattr(
+        experiment_slurm,
+        "_fsync_directory",
+        create_competing_target,
+    )
+
+    with pytest.raises(FileExistsError):
+        prepare_run(
+            loaded,
+            repo_root=tmp_path,
+            python_executable=Path("/usr/bin/python3"),
+            git_commit="4" * 40,
+            git_dirty=False,
+        )
+
+    assert target_inode is not None
+    assert output_dir.is_dir()
+    assert output_dir.stat().st_ino == target_inode
+    assert list(output_dir.iterdir()) == []
+    assert set(output_parent.iterdir()) == {output_dir}
+
+
+def test_prepare_run_cleans_temp_when_temp_directory_fsync_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _write_loaded_experiment(tmp_path)
+    output_dir = loaded.config.artifacts.output_dir
+    rename = Mock(side_effect=AssertionError("rename must not be attempted"))
+    monkeypatch.setattr(experiment_slurm, "_rename_noreplace", rename)
+    monkeypatch.setattr(
+        experiment_slurm,
+        "_fsync_directory",
+        Mock(side_effect=OSError("injected directory fsync failure")),
+    )
+
+    with pytest.raises(OSError, match="injected directory fsync failure"):
+        prepare_run(
+            loaded,
+            repo_root=tmp_path,
+            python_executable=Path("/usr/bin/python3"),
+            git_commit="5" * 40,
+            git_dirty=False,
+        )
+
+    rename.assert_not_called()
+    assert not output_dir.exists()
+    assert output_dir.parent.is_dir()
+    assert list(output_dir.parent.iterdir()) == []
+
+
+def test_prepare_run_fsyncs_temp_then_parent_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _write_loaded_experiment(tmp_path)
+    output_dir = loaded.config.artifacts.output_dir
+    events: list[tuple[str, Path, Path | None]] = []
+    real_rename = experiment_slurm._rename_noreplace
+
+    def record_rename(source: Path, destination: Path) -> None:
+        events.append(("rename", source, destination))
+        real_rename(source, destination)
+
+    monkeypatch.setattr(
+        experiment_slurm,
+        "_fsync_directory",
+        lambda path: events.append(("fsync", path, None)),
+    )
+    monkeypatch.setattr(experiment_slurm, "_rename_noreplace", record_rename)
+
+    prepare_run(
+        loaded,
+        repo_root=tmp_path,
+        python_executable=Path("/usr/bin/python3"),
+        git_commit="6" * 40,
+        git_dirty=False,
+    )
+
+    assert len(events) == 3
+    assert events[0][0] == "fsync"
+    assert events[0][1].parent == output_dir.parent
+    assert events[0][1].name.startswith(f".{output_dir.name}.")
+    assert events[1] == ("rename", events[0][1], output_dir)
+    assert events[2] == ("fsync", output_dir.parent, None)
+
+
+def test_rename_noreplace_fails_closed_when_syscall_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    monkeypatch.setattr(experiment_slurm, "_RENAMEAT2", None)
+
+    with pytest.raises(OSError) as error:
+        experiment_slurm._rename_noreplace(source, destination)
+
+    assert error.value.errno == errno.ENOSYS
+    assert source.is_dir()
+    assert not destination.exists()
 
 
 def test_git_state_uses_argv_subprocess_calls(tmp_path: Path) -> None:

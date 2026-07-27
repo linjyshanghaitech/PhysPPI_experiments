@@ -5,6 +5,7 @@ import os
 import re
 from collections.abc import Mapping
 from copy import deepcopy
+from io import BytesIO
 from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple
 
@@ -13,6 +14,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    PrivateAttr,
     StringConstraints,
     field_validator,
 )
@@ -51,6 +53,17 @@ EnvironmentTuple = Annotated[
     tuple[EnvironmentName, ...],
     BeforeValidator(_normalize_tuple),
 ]
+
+
+class SourceSnapshot(NamedTuple):
+    path: Path
+    content: bytes
+
+
+class _SourceSnapshots(NamedTuple):
+    experiment: SourceSnapshot
+    profile: SourceSnapshot
+    local: SourceSnapshot | None
 
 
 class StrictModel(BaseModel):
@@ -116,6 +129,7 @@ class ExperimentConfig(SchemaVersionModel):
     artifacts: ArtifactsSection
     environment: EnvironmentSection = Field(default_factory=EnvironmentSection)
     validation: ValidationSection = Field(default_factory=ValidationSection)
+    _source_snapshots: _SourceSnapshots | None = PrivateAttr(default=None)
 
 
 class SlurmProfileFile(SchemaVersionModel):
@@ -135,13 +149,32 @@ class LoadedExperiment(NamedTuple):
     profile_path: Path
     local_path: Path | None
 
+    def _sources(self) -> _SourceSnapshots:
+        sources = self.config._source_snapshots
+        if sources is None:
+            raise ValueError("experiment source snapshots are missing")
+        return sources
 
-def _load_toml(path: Path) -> dict[str, Any]:
+    @property
+    def experiment_source(self) -> SourceSnapshot:
+        return self._sources().experiment
+
+    @property
+    def profile_source(self) -> SourceSnapshot:
+        return self._sources().profile
+
+    @property
+    def local_source(self) -> SourceSnapshot | None:
+        return self._sources().local
+
+
+def _load_toml(path: Path) -> tuple[dict[str, Any], SourceSnapshot]:
+    content = path.read_bytes()
     try:
-        with path.open("rb") as handle:
-            return tomllib.load(handle)
+        parsed = tomllib.load(BytesIO(content))
     except tomllib.TOMLDecodeError as exc:
         raise ValueError(f"invalid TOML in {path}: {exc}") from exc
+    return parsed, SourceSnapshot(path=path, content=content)
 
 
 def _same_value_kind(left: object, right: object) -> bool:
@@ -330,13 +363,15 @@ def load_experiment(
     )
     environment = dict(os.environ if environ is None else environ)
 
-    experiment_file = ExperimentConfig.model_validate(_load_toml(experiment_path))
+    experiment_raw, experiment_source = _load_toml(experiment_path)
+    experiment_file = ExperimentConfig.model_validate(experiment_raw)
     expanded_profile = _expand_string(
         str(experiment_file.slurm.profile),
         environment,
     )
     profile_path = _resolve_repo_path(expanded_profile, repo_root)
-    profile_file = SlurmProfileFile.model_validate(_load_toml(profile_path))
+    profile_raw, profile_source = _load_toml(profile_path)
+    profile_file = SlurmProfileFile.model_validate(profile_raw)
 
     merged = _merge_mappings(
         _without_schema_version(profile_file),
@@ -344,8 +379,10 @@ def load_experiment(
     )
     merged["schema_version"] = experiment_file.schema_version
 
+    local_source = None
     if resolved_local_path is not None:
-        local_file = LocalOverrideFile.model_validate(_load_toml(resolved_local_path))
+        local_raw, local_source = _load_toml(resolved_local_path)
+        local_file = LocalOverrideFile.model_validate(local_raw)
         merged = _merge_mappings(
             merged,
             _without_schema_version(local_file),
@@ -356,6 +393,11 @@ def load_experiment(
     _resolve_config_paths(expanded, repo_root)
     config = ExperimentConfig.model_validate(expanded)
     _preflight(config, validate_module=validate_module)
+    config._source_snapshots = _SourceSnapshots(
+        experiment=experiment_source,
+        profile=profile_source,
+        local=local_source,
+    )
 
     return LoadedExperiment(
         config=config,
@@ -376,6 +418,7 @@ __all__ = [
     "OpenFoldSection",
     "SlurmProfileFile",
     "SlurmResources",
+    "SourceSnapshot",
     "ValidationSection",
     "load_experiment",
 ]

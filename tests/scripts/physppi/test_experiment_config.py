@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from scripts.physppi.experiment_config import load_experiment
+from scripts.physppi.experiment_config import LoadedExperiment, load_experiment
 
 
 def _write_minimal_config(root: Path) -> Path:
@@ -70,6 +70,8 @@ def test_load_experiment_merges_and_expands(tmp_path: Path) -> None:
     assert loaded.experiment_path == config
     assert loaded.profile_path == tmp_path / "profile.toml"
     assert loaded.local_path is None
+    assert len(loaded) == 4
+    assert LoadedExperiment(*loaded) == loaded
 
 
 def test_unknown_experiment_field_is_rejected(tmp_path: Path) -> None:
