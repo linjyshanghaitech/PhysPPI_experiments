@@ -468,6 +468,24 @@ def test_expanded_environment_value_rejects_newline(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize("control", ["\v", "\f", "\u2028"])
+def test_expanded_environment_value_rejects_all_controls_and_line_separators(
+    tmp_path: Path,
+    control: str,
+) -> None:
+    data, environ = _make_inputs(tmp_path)
+    config = _write_minimal_config(tmp_path)
+    environ["DATA_ROOT"] = f"{data}{control}INJECTED=value"
+
+    with pytest.raises(ValueError, match="control character"):
+        load_experiment(
+            config,
+            repo_root=tmp_path,
+            environ=environ,
+            validate_module=False,
+        )
+
+
 def test_module_preflight_does_not_execute_parent_package(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

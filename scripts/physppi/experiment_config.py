@@ -27,7 +27,6 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
 
 _ENVIRONMENT_PLACEHOLDER = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 _ENVIRONMENT_IDENTIFIER = r"^[A-Za-z_][A-Za-z0-9_]*$"
-_PROHIBITED_CONTROL_CHARACTERS = frozenset("\r\n\0")
 
 
 def _normalize_path(value: object) -> object:
@@ -231,7 +230,7 @@ def _expand_string(value: str, environ: Mapping[str, str]) -> str:
         return environ[name]
 
     expanded = _ENVIRONMENT_PLACEHOLDER.sub(replace, value)
-    if any(character in expanded for character in _PROHIBITED_CONTROL_CHARACTERS):
+    if not expanded.isprintable():
         raise ValueError("configuration string contains a prohibited control character")
     return expanded
 

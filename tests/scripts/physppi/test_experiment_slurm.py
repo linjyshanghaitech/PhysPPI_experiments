@@ -125,6 +125,7 @@ def _prepared_submission(
     *,
     command: tuple[str, ...] = ("/usr/bin/python3", "-m", "example"),
     script: str = "#!/bin/bash\n",
+    redactions: tuple[str, ...] | None = None,
 ) -> PreparedRun:
     run_dir = root / "prepared-run"
     run_dir.mkdir()
@@ -134,7 +135,23 @@ def _prepared_submission(
         run_dir=run_dir,
         script_path=script_path,
         command=command,
+        _redactions=command if redactions is None else redactions,
     )
+
+
+def test_prepared_run_redactions_are_private_keyword_only_metadata(
+    tmp_path: Path,
+) -> None:
+    public = PreparedRun(tmp_path, tmp_path / "job.sbatch", ("python",))
+    private = PreparedRun(
+        tmp_path,
+        tmp_path / "job.sbatch",
+        ("python",),
+        _redactions=("private-value",),
+    )
+
+    assert private == public
+    assert "private-value" not in repr(private)
 
 
 def test_build_command_uses_python_module_and_exact_args(tmp_path: Path) -> None:
@@ -399,6 +416,59 @@ def test_prepare_run_redacts_every_local_scalar_and_preserves_containers(
     text = redacted_path.read_text()
     for secret in ["secret-account", "top-secret", '"TOKEN"', '"SECOND_TOKEN"']:
         assert secret not in text
+
+
+def test_prepare_run_carries_structured_redactions_in_memory(
+    tmp_path: Path,
+) -> None:
+    loaded = _write_loaded_experiment(tmp_path, local=True)
+
+    prepared = prepare_run(
+        loaded,
+        repo_root=tmp_path,
+        python_executable=Path("/usr/bin/python3"),
+        git_commit="8" * 40,
+        git_dirty=False,
+    )
+
+    assert {
+        "secret-account",
+        "3",
+        "top-secret",
+        "TOKEN",
+        "SECOND_TOKEN",
+        *prepared.command,
+    } <= set(prepared._redactions)
+    assert "" not in prepared._redactions
+    assert "top-secret" not in repr(prepared)
+
+
+def test_submit_run_redacts_local_slurm_values_without_parsing_sbatch(
+    tmp_path: Path,
+) -> None:
+    loaded = _write_loaded_experiment(tmp_path, local=True)
+    prepared = prepare_run(
+        loaded,
+        repo_root=tmp_path,
+        python_executable=Path("/usr/bin/python3"),
+        git_commit="9" * 40,
+        git_dirty=False,
+    )
+    runner = Mock(
+        return_value=subprocess.CompletedProcess(
+            args=["sbatch"],
+            returncode=1,
+            stdout="",
+            stderr="account secret-account was rejected",
+        )
+    )
+
+    with pytest.raises(RuntimeError):
+        submit_run(prepared, runner=runner)
+
+    serialized = (prepared.run_dir / "submission-error.json").read_text()
+    assert "secret-account" not in serialized
+    assert json.loads(serialized)["stderr"] == "account <redacted> was rejected"
 
 
 def test_prepare_run_omits_local_archive_when_no_local_config(
@@ -779,6 +849,7 @@ def test_prepare_run_never_invokes_sbatch(
         ("12345", "12345"),
         ("12345\r\n", "12345"),
         ("12345;cluster\n", "12345"),
+        ("12345;cluster+gpu\n", "12345"),
     ],
 )
 def test_submit_run_records_only_valid_job_id(
@@ -812,6 +883,14 @@ def test_submit_run_records_only_valid_job_id(
         "job_id": expected_job_id,
         "sbatch_sha256": _sha256(prepared.script_path),
     }
+    attempt = json.loads((prepared.run_dir / "submission-attempt.json").read_text())
+    assert attempt == {
+        "schema_version": 1,
+        "attempted_at_utc": attempt["attempted_at_utc"],
+        "sbatch_sha256": _sha256(prepared.script_path),
+        "state": "submitting",
+    }
+    assert attempt["attempted_at_utc"].endswith("Z")
     assert submitted["submitted_at_utc"].endswith("Z")
     assert not (prepared.run_dir / "submission-error.json").exists()
 
@@ -830,6 +909,10 @@ def test_submit_run_records_only_valid_job_id(
         "12345\t",
         "12345;cluster \n",
         "12345\n\n",
+        "１２３４５",
+        "12345;\n",
+        "12345;cluster;gpu\n",
+        "12345;cluster\v",
     ],
 )
 def test_submit_run_rejects_invalid_job_id(
@@ -879,6 +962,10 @@ def test_submit_run_records_nonzero_exit_without_submitted_state(
     assert error["error_type"] == "nonzero_exit"
     assert error["returncode"] == 2
     assert error["stderr"] == "scheduler rejected request"
+    assert (
+        json.loads((prepared.run_dir / "submission-attempt.json").read_text())["state"]
+        == "submitting"
+    )
 
 
 @pytest.mark.parametrize(
@@ -918,6 +1005,7 @@ def test_submit_run_redacts_command_and_export_secrets_and_cleans_stderr(
             f"export API_TOKEN={shlex.quote(export_secret)}\n"
             "exec /usr/bin/python3\n"
         ),
+        redactions=(command_secret, export_secret),
     )
     stderr = (
         "x" * 9000
@@ -957,6 +1045,7 @@ def test_submit_run_redaction_does_not_rewrite_its_placeholder(
         tmp_path,
         command=("redacted",),
         script="#!/bin/bash\nexport TOKEN=prefix-redacted\n",
+        redactions=("redacted", "prefix-redacted"),
     )
     runner = Mock(
         return_value=subprocess.CompletedProcess(
@@ -980,6 +1069,7 @@ def test_submit_run_removes_controls_before_redacting_secrets(
     prepared = _prepared_submission(
         tmp_path,
         command=("command-secret",),
+        redactions=("command-secret",),
     )
     runner = Mock(
         return_value=subprocess.CompletedProcess(
@@ -998,6 +1088,30 @@ def test_submit_run_removes_controls_before_redacting_secrets(
     assert json.loads(serialized)["stderr"] == "failure: <redacted>"
 
 
+def test_submit_run_redacts_secrets_containing_vertical_controls(
+    tmp_path: Path,
+) -> None:
+    prepared = _prepared_submission(
+        tmp_path,
+        redactions=("vertical\vsecret",),
+    )
+    runner = Mock(
+        return_value=subprocess.CompletedProcess(
+            args=["sbatch"],
+            returncode=1,
+            stdout="",
+            stderr="failure: vertical\vsecret",
+        )
+    )
+
+    with pytest.raises(RuntimeError):
+        submit_run(prepared, runner=runner)
+
+    serialized = (prepared.run_dir / "submission-error.json").read_text()
+    assert "verticalsecret" not in serialized
+    assert json.loads(serialized)["stderr"] == "failure: <redacted>"
+
+
 def test_submit_run_fails_before_runner_when_already_submitted(
     tmp_path: Path,
 ) -> None:
@@ -1012,6 +1126,83 @@ def test_submit_run_fails_before_runner_when_already_submitted(
 
     runner.assert_not_called()
     assert submitted_path.read_text() == original
+
+
+@pytest.mark.parametrize(
+    "existing_state",
+    ["submission-attempt.json", "submission-error.json"],
+)
+def test_submit_run_fails_closed_before_runner_for_existing_submission_state(
+    tmp_path: Path,
+    existing_state: str,
+) -> None:
+    prepared = _prepared_submission(tmp_path)
+    state_path = prepared.run_dir / existing_state
+    original = '{"state": "unknown"}\n'
+    state_path.write_text(original)
+    runner = Mock(side_effect=AssertionError("runner must not be called"))
+
+    with pytest.raises(RuntimeError, match="manual reconciliation"):
+        submit_run(prepared, runner=runner)
+
+    runner.assert_not_called()
+    assert state_path.read_text() == original
+    assert not (prepared.run_dir / "submitted.json").exists()
+
+
+def test_submit_run_does_not_call_runner_when_attempt_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = _prepared_submission(tmp_path)
+    runner = Mock(side_effect=AssertionError("runner must not be called"))
+    real_atomic_write = experiment_slurm._atomic_write_json
+
+    def fail_attempt(path: Path, value: object, **kwargs: object) -> None:
+        if path.name == "submission-attempt.json":
+            raise OSError("attempt write failed")
+        real_atomic_write(path, value, **kwargs)
+
+    monkeypatch.setattr(experiment_slurm, "_atomic_write_json", fail_attempt)
+
+    with pytest.raises(OSError, match="attempt write failed"):
+        submit_run(prepared, runner=runner)
+
+    runner.assert_not_called()
+    assert not (prepared.run_dir / "submission-attempt.json").exists()
+    assert not (prepared.run_dir / "submitted.json").exists()
+
+
+def test_submit_run_does_not_retry_after_submitted_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = _prepared_submission(tmp_path)
+    runner = Mock(
+        return_value=subprocess.CompletedProcess(
+            args=["sbatch"],
+            returncode=0,
+            stdout="12345\n",
+            stderr="",
+        )
+    )
+    real_atomic_write = experiment_slurm._atomic_write_json
+
+    def fail_submitted(path: Path, value: object, **kwargs: object) -> None:
+        if path.name == "submitted.json":
+            raise OSError("submitted write failed")
+        real_atomic_write(path, value, **kwargs)
+
+    monkeypatch.setattr(experiment_slurm, "_atomic_write_json", fail_submitted)
+
+    with pytest.raises(OSError, match="submitted write failed"):
+        submit_run(prepared, runner=runner)
+    with pytest.raises(RuntimeError, match="manual reconciliation"):
+        submit_run(prepared, runner=runner)
+
+    assert runner.call_count == 1
+    assert (prepared.run_dir / "submission-attempt.json").is_file()
+    assert not (prepared.run_dir / "submitted.json").exists()
 
 
 def test_submit_run_serializes_concurrent_submission_attempts(
@@ -1058,8 +1249,6 @@ def test_submit_run_atomically_replaces_status_and_fsyncs_directory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prepared = _prepared_submission(tmp_path)
-    error_path = prepared.run_dir / "submission-error.json"
-    error_path.write_text('{"stale": true}\n')
     replacements: list[tuple[Path, Path]] = []
     fsyncs: list[Path] = []
     real_replace = experiment_slurm.os.replace
@@ -1085,9 +1274,10 @@ def test_submit_run_atomically_replaces_status_and_fsyncs_directory(
 
     assert submit_run(prepared, runner=runner) == "54321"
 
-    assert len(replacements) == 1
-    temporary, destination = replacements[0]
-    assert temporary.parent == prepared.run_dir
-    assert destination == prepared.run_dir / "submitted.json"
-    assert fsyncs == [prepared.run_dir]
-    assert not error_path.exists()
+    assert len(replacements) == 2
+    assert all(temporary.parent == prepared.run_dir for temporary, _ in replacements)
+    assert [destination.name for _, destination in replacements] == [
+        "submission-attempt.json",
+        "submitted.json",
+    ]
+    assert fsyncs == [prepared.run_dir, prepared.run_dir]

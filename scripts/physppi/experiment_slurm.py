@@ -11,10 +11,9 @@ import shlex
 import shutil
 import subprocess
 import tempfile
-import unicodedata
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -72,6 +71,12 @@ class PreparedRun:
     run_dir: Path
     script_path: Path
     command: tuple[str, ...]
+    _redactions: tuple[str, ...] = field(
+        default=(),
+        kw_only=True,
+        repr=False,
+        compare=False,
+    )
 
 
 def build_command(
@@ -218,12 +223,7 @@ def _write_json(path: Path, value: Any) -> None:
     _write_text(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
-def _atomic_write_json(
-    path: Path,
-    value: Any,
-    *,
-    remove_after_replace: tuple[Path, ...] = (),
-) -> None:
+def _atomic_write_json(path: Path, value: Any) -> None:
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -240,8 +240,6 @@ def _atomic_write_json(
             os.fsync(handle.fileno())
         os.replace(temporary, path)
         temporary = None
-        for stale_path in remove_after_replace:
-            stale_path.unlink(missing_ok=True)
         _fsync_directory(path.parent)
     finally:
         if temporary is not None:
@@ -297,40 +295,30 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _submission_secrets(prepared: PreparedRun) -> tuple[str, ...]:
-    secrets = {part for part in prepared.command if part}
-    try:
-        lines = prepared.script_path.read_text().splitlines()
-    except (OSError, UnicodeError):
-        lines = []
-    for line in lines:
-        if not line.startswith("export "):
-            continue
-        try:
-            fields = shlex.split(line)
-        except ValueError:
-            continue
-        if len(fields) != 2 or fields[0] != "export" or "=" not in fields[1]:
-            continue
-        _, value = fields[1].split("=", 1)
-        if value:
-            secrets.add(value)
-    return tuple(sorted(secrets, key=lambda value: (-len(value), value)))
+def _scalar_redactions(value: object) -> set[str]:
+    if isinstance(value, Mapping):
+        redactions: set[str] = set()
+        for item in value.values():
+            redactions.update(_scalar_redactions(item))
+        return redactions
+    if isinstance(value, (list, tuple)):
+        redactions = set()
+        for item in value:
+            redactions.update(_scalar_redactions(item))
+        return redactions
+    if value is None:
+        return set()
+    rendered = str(value)
+    return {rendered} if rendered else set()
 
 
 def _clean_submission_stderr(prepared: PreparedRun, stderr: str) -> str:
-    cleaned = "".join(
-        character for character in stderr if unicodedata.category(character) != "Cc"
-    )
+    cleaned = "".join(character for character in stderr if character.isprintable())
     secrets = tuple(
         sorted(
             {
-                "".join(
-                    character
-                    for character in secret
-                    if unicodedata.category(character) != "Cc"
-                )
-                for secret in _submission_secrets(prepared)
+                "".join(character for character in secret if character.isprintable())
+                for secret in prepared._redactions
             }
             - {""},
             key=lambda value: (-len(value), value),
@@ -363,6 +351,30 @@ def _record_submission_error(
     )
 
 
+def _parse_sbatch_job_id(stdout: str) -> str | None:
+    if stdout.endswith("\r\n"):
+        value = stdout[:-2]
+    elif stdout.endswith("\n"):
+        value = stdout[:-1]
+    else:
+        value = stdout
+
+    job_id, separator, cluster = value.partition(";")
+    if re.fullmatch(r"[0-9]+", job_id) is None:
+        return None
+    if not separator:
+        return job_id
+    if (
+        not cluster
+        or ";" in cluster
+        or any(
+            not character.isprintable() or character.isspace() for character in cluster
+        )
+    ):
+        return None
+    return job_id
+
+
 @contextmanager
 def _submission_lock(run_dir: Path) -> Iterator[None]:
     descriptor = os.open(run_dir, os.O_RDONLY | os.O_DIRECTORY)
@@ -380,8 +392,24 @@ def _submit_run_locked(
     runner: Callable[..., subprocess.CompletedProcess[str]],
 ) -> str:
     submitted_path = prepared.run_dir / "submitted.json"
-    if submitted_path.exists():
-        raise RuntimeError(f"run is already submitted: {prepared.run_dir}")
+    attempt_path = prepared.run_dir / "submission-attempt.json"
+    error_path = prepared.run_dir / "submission-error.json"
+    if submitted_path.exists() or attempt_path.exists() or error_path.exists():
+        raise RuntimeError(
+            "run is already submitted or has a prior submission attempt; "
+            f"manual reconciliation is required: {prepared.run_dir}"
+        )
+
+    sbatch_sha256 = _sha256(prepared.script_path)
+    _atomic_write_json(
+        attempt_path,
+        {
+            "schema_version": 1,
+            "attempted_at_utc": _utc_now(),
+            "sbatch_sha256": sbatch_sha256,
+            "state": "submitting",
+        },
+    )
 
     try:
         result = runner(
@@ -410,11 +438,8 @@ def _submit_run_locked(
             f"Slurm submission failed with return code {result.returncode}"
         )
 
-    match = re.fullmatch(
-        r"(?P<job_id>[0-9]+)(?:;[A-Za-z0-9_.-]+)?(?:\r?\n)?",
-        result.stdout or "",
-    )
-    if match is None:
+    job_id = _parse_sbatch_job_id(result.stdout or "")
+    if job_id is None:
         _record_submission_error(
             prepared,
             error_type="invalid_job_id",
@@ -423,18 +448,19 @@ def _submit_run_locked(
         )
         raise RuntimeError("Slurm submission returned an invalid job ID")
 
-    job_id = match.group("job_id")
     if submitted_path.exists():
-        raise RuntimeError(f"run is already submitted: {prepared.run_dir}")
+        raise RuntimeError(
+            "run acquired unexpected submitted state; "
+            f"manual reconciliation is required: {prepared.run_dir}"
+        )
     _atomic_write_json(
         submitted_path,
         {
             "schema_version": 1,
             "submitted_at_utc": _utc_now(),
             "job_id": job_id,
-            "sbatch_sha256": _sha256(prepared.script_path),
+            "sbatch_sha256": sbatch_sha256,
         },
-        remove_after_replace=(prepared.run_dir / "submission-error.json",),
     )
     return job_id
 
@@ -461,6 +487,7 @@ def prepare_run(
         raise FileExistsError(output_dir)
 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
+    redactions = _scalar_redactions(loaded.config.model_dump(mode="python"))
     temporary_dir = Path(
         tempfile.mkdtemp(
             prefix=f".{output_dir.name}.",
@@ -482,6 +509,7 @@ def prepare_run(
             if loaded.local_source is None:
                 raise ValueError("local source snapshot is missing")
             raw_local = tomllib.load(BytesIO(loaded.local_source.content))
+            redactions.update(_scalar_redactions(raw_local))
             local_archive = temporary_dir / "local-overrides.redacted.toml"
             _write_text(local_archive, render_redacted_local(raw_local))
             config_sha256["local-overrides.redacted.toml"] = _sha256(local_archive)
@@ -498,6 +526,7 @@ def prepare_run(
             loaded.config,
             python_executable=python_executable,
         )
+        redactions.update(part for part in command if part)
         _write_json(temporary_dir / "command.json", command)
 
         sbatch = render_sbatch(
@@ -535,6 +564,7 @@ def prepare_run(
         run_dir=output_dir,
         script_path=output_dir / "job.sbatch",
         command=command,
+        _redactions=tuple(sorted(redactions, key=lambda value: (-len(value), value))),
     )
 
 
