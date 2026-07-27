@@ -4,7 +4,129 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from scripts.physppi.experiment_config import LoadedExperiment, load_experiment
+from scripts.physppi.experiment_config import (
+    LoadedExperiment,
+    SlurmProfileFile,
+    load_experiment,
+)
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
+    import tomli as tomllib
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _touch(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n")
+    return path
+
+
+def _make_real_config_inputs(tmp_path: Path) -> dict[str, str]:
+    qbiolip_root = tmp_path / "qbiolip"
+    afdb_root = tmp_path / "afdb"
+    formal_root = tmp_path / "formal"
+    msa_cache = tmp_path / "msa-cache"
+    output_root = tmp_path / "output"
+    for path in (
+        qbiolip_root,
+        afdb_root,
+        formal_root,
+        msa_cache / "colabfold_msas/main",
+    ):
+        path.mkdir(parents=True)
+
+    components_cif = _touch(tmp_path / "components.cif")
+    for relative_path in (
+        "reader-index-cache/qbiolip10k-v1.pkl",
+        "reader-index-cache/afdb10k-v1.pkl",
+        "manifests/qbiolip-audit.json",
+        "manifests/afdb-audit.json",
+        "manifests/formal-manifest.json",
+        "manifests/runtime-failure-ledger.jsonl",
+        "audits/v1-v32-full-20k-data-errors/data-error-ids.json",
+    ):
+        _touch(formal_root / relative_path)
+    _touch(msa_cache / "colabfold_msas/mappings/rep_id_to_seq.json")
+
+    return {
+        "QBIOLIP_ROOT": str(qbiolip_root),
+        "AFDB_ROOT": str(afdb_root),
+        "FORMAL_ROOT": str(formal_root),
+        "COMPONENTS_CIF": str(components_cif),
+        "MSA_CACHE": str(msa_cache),
+        "OUTPUT_ROOT": str(output_root),
+    }
+
+
+@pytest.mark.parametrize(
+    ("config_name", "run_name"),
+    [
+        (
+            "audit_protected_chain_matching.toml",
+            "audit-protected-chain-matching-v1",
+        ),
+        (
+            "build_minimal_alignment_arrays.toml",
+            "build-minimal-arrays-v1",
+        ),
+        (
+            "audit_v1_v32_data_errors.toml",
+            "audit-v1-v32-data-errors-v1",
+        ),
+    ],
+)
+def test_real_permutation_alignment_config_loads(
+    tmp_path: Path,
+    config_name: str,
+    run_name: str,
+) -> None:
+    environ = _make_real_config_inputs(tmp_path)
+    config_path = REPO_ROOT / "configs/experiments/permutation_alignment" / config_name
+
+    loaded = load_experiment(
+        config_path,
+        repo_root=REPO_ROOT,
+        environ=environ,
+        validate_module=True,
+    )
+
+    assert loaded.config.experiment.module.startswith(
+        "experiments.permutation_alignment."
+    )
+    assert loaded.config.experiment.run_name == run_name
+    assert loaded.config.openfold is None
+    assert loaded.profile_path == REPO_ROOT / "configs/slurm/cpu_debug.toml"
+    assert loaded.config.artifacts.output_dir.is_relative_to(
+        Path(environ["OUTPUT_ROOT"])
+    )
+    assert "/101045/" not in config_path.read_text()
+    assert "/101045/" not in loaded.profile_path.read_text()
+
+
+@pytest.mark.parametrize(
+    "profile_name",
+    ["cpu_debug.toml", "single_gpu_debug.toml"],
+)
+def test_real_slurm_profile_has_strict_schema(profile_name: str) -> None:
+    profile_path = REPO_ROOT / "configs/slurm" / profile_name
+
+    profile = SlurmProfileFile.model_validate(tomllib.loads(profile_path.read_text()))
+
+    assert profile.schema_version == 1
+    assert profile.slurm.nodes == 1
+    assert profile.slurm.ntasks_per_node == 1
+    assert profile.slurm.cpus_per_task == 8
+    assert profile.slurm.memory == "64G"
+    assert profile.slurm.time == "04:00:00"
+    assert profile.slurm.partition is None
+    assert profile.slurm.account is None
+    assert profile.slurm.qos is None
+    assert profile.slurm.gpus_per_node == (
+        1 if profile_name == "single_gpu_debug.toml" else None
+    )
 
 
 def _write_minimal_config(root: Path) -> Path:

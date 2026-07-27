@@ -1,0 +1,8 @@
+schema_version = 1
+
+[slurm]
+nodes = 1
+ntasks_per_node = 1
+cpus_per_task = 8
+memory = "64G"
+time = "04:00:00"

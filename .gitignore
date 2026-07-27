@@ -32,6 +32,8 @@ cutlass/
 **/__pycache__/
 
 # Local experiment outputs and credentials
+/configs/local/*.toml
+!/configs/local/README.md
 /output/
 /outputs/
 /logs/
