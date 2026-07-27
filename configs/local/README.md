@@ -1,19 +1,9 @@
 # Local experiment overrides
 
 Files named `configs/local/*.toml` contain site- or user-specific values and are
-ignored by Git. They are never discovered automatically. Load one explicitly
-with `--local-config`:
-
-```bash
-PHYSPPI_MSA_CACHE=/path/to/msa-cache \
-PHYSPPI_OUTPUT_ROOT=/path/to/output \
-python scripts/physppi/submit_experiment.py \
-  configs/experiments/permutation_alignment/build_minimal_alignment_arrays.toml \
-  --local-config configs/local/example.toml
-```
-
-A local override may contain only `schema_version = 1`, `[slurm]`, and
-`[environment]`. For example:
+ignored by Git and are never discovered automatically.
+`configs/local/example.toml` is not provided by Git. Before running the
+launcher, create that ignored file from this template:
 
 ```toml
 schema_version = 1
@@ -34,6 +24,18 @@ required = ["PHYSPPI_MSA_CACHE", "PHYSPPI_OUTPUT_ROOT"]
 
 [environment.export]
 PHYSPPI_SITE_CACHE = "/path/to/local/cache"
+```
+
+A local override may contain only `schema_version = 1`, `[slurm]`, and
+`[environment]`. After creating the file, load it explicitly with
+`--local-config`:
+
+```bash
+PHYSPPI_MSA_CACHE=/path/to/msa-cache \
+PHYSPPI_OUTPUT_ROOT=/path/to/output \
+python scripts/physppi/submit_experiment.py \
+  configs/experiments/permutation_alignment/build_minimal_alignment_arrays.toml \
+  --local-config configs/local/example.toml
 ```
 
 Allowed Slurm keys are `partition`, `account`, `qos`, `nodes`,

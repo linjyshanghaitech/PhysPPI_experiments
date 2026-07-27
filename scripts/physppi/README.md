@@ -30,7 +30,8 @@ This is the default dry-run behavior: it validates inputs and creates the
 auditable run directory and `job.sbatch`, but it does not call `sbatch`.
 
 Apply machine-specific scheduler or environment values only through an
-explicit local override:
+explicit local override. `configs/local/example.toml` is not provided by Git;
+first create it from the template in `configs/local/README.md`, then run:
 
 ```bash
 PHYSPPI_MSA_CACHE=/path/to/msa-cache \
@@ -41,7 +42,8 @@ PHYSPPI_OUTPUT_ROOT=/path/to/output \
   --local-config configs/local/example.toml
 ```
 
-Submit only by adding `--submit`:
+After creating `configs/local/example.toml` as described in
+`configs/local/README.md`, submit only by adding `--submit`:
 
 ```bash
 PHYSPPI_MSA_CACHE=/path/to/msa-cache \

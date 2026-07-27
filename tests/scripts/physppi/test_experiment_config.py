@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from scripts.physppi.experiment_config import (
+    ExperimentConfig,
     LoadedExperiment,
     SlurmProfileFile,
     load_experiment,
@@ -16,6 +17,103 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
     import tomli as tomllib
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+EXPERIMENT_CONFIG_CASES = (
+    (
+        Path(
+            "configs/experiments/permutation_alignment/"
+            "audit_protected_chain_matching.toml"
+        ),
+        "audit-protected-chain-matching-v1",
+        {
+            "PHYSPPI_QBIOLIP_ROOT",
+            "PHYSPPI_AFDB_ROOT",
+            "PHYSPPI_FORMAL_ROOT",
+            "PHYSPPI_COMPONENTS_CIF",
+            "PHYSPPI_OUTPUT_ROOT",
+        },
+    ),
+    (
+        Path(
+            "configs/experiments/permutation_alignment/"
+            "build_minimal_alignment_arrays.toml"
+        ),
+        "build-minimal-arrays-v1",
+        {
+            "PHYSPPI_MSA_CACHE",
+            "PHYSPPI_OUTPUT_ROOT",
+        },
+    ),
+    (
+        Path("configs/experiments/permutation_alignment/audit_v1_v32_data_errors.toml"),
+        "audit-v1-v32-data-errors-v1",
+        {
+            "PHYSPPI_QBIOLIP_ROOT",
+            "PHYSPPI_AFDB_ROOT",
+            "PHYSPPI_FORMAL_ROOT",
+            "PHYSPPI_OUTPUT_ROOT",
+        },
+    ),
+)
+SLURM_PROFILE_CASES = (
+    (Path("configs/slurm/cpu_debug.toml"), None),
+    (Path("configs/slurm/single_gpu_debug.toml"), 1),
+)
+
+
+def _discover_experiment_configs() -> tuple[Path, ...]:
+    return tuple(
+        sorted(
+            path.relative_to(REPO_ROOT)
+            for path in REPO_ROOT.glob("configs/experiments/**/*.toml")
+        )
+    )
+
+
+def _discover_slurm_profiles() -> tuple[Path, ...]:
+    return tuple(
+        sorted(
+            path.relative_to(REPO_ROOT)
+            for path in REPO_ROOT.glob("configs/slurm/*.toml")
+        )
+    )
+
+
+def test_experiment_config_inventory_matches_contract_cases() -> None:
+    expected = tuple(sorted(case[0] for case in EXPERIMENT_CONFIG_CASES))
+
+    assert _discover_experiment_configs() == expected
+
+
+def test_slurm_profile_inventory_matches_contract_cases() -> None:
+    expected = tuple(sorted(case[0] for case in SLURM_PROFILE_CASES))
+
+    assert _discover_slurm_profiles() == expected
+
+
+@pytest.mark.parametrize(
+    "config_path",
+    _discover_experiment_configs(),
+    ids=lambda path: path.name,
+)
+def test_discovered_experiment_config_has_strict_schema(config_path: Path) -> None:
+    raw = tomllib.loads((REPO_ROOT / config_path).read_text())
+
+    config = ExperimentConfig.model_validate(raw)
+
+    assert config.schema_version == 1
+
+
+@pytest.mark.parametrize(
+    "profile_path",
+    _discover_slurm_profiles(),
+    ids=lambda path: path.name,
+)
+def test_discovered_slurm_profile_has_strict_schema(profile_path: Path) -> None:
+    raw = tomllib.loads((REPO_ROOT / profile_path).read_text())
+
+    profile = SlurmProfileFile.model_validate(raw)
+
+    assert profile.schema_version == 1
 
 
 def _touch(path: Path) -> Path:
@@ -62,50 +160,21 @@ def _make_real_config_inputs(tmp_path: Path) -> dict[str, str]:
 
 
 @pytest.mark.parametrize(
-    ("config_name", "run_name", "required_environment"),
-    [
-        (
-            "audit_protected_chain_matching.toml",
-            "audit-protected-chain-matching-v1",
-            {
-                "PHYSPPI_QBIOLIP_ROOT",
-                "PHYSPPI_AFDB_ROOT",
-                "PHYSPPI_FORMAL_ROOT",
-                "PHYSPPI_COMPONENTS_CIF",
-                "PHYSPPI_OUTPUT_ROOT",
-            },
-        ),
-        (
-            "build_minimal_alignment_arrays.toml",
-            "build-minimal-arrays-v1",
-            {
-                "PHYSPPI_MSA_CACHE",
-                "PHYSPPI_OUTPUT_ROOT",
-            },
-        ),
-        (
-            "audit_v1_v32_data_errors.toml",
-            "audit-v1-v32-data-errors-v1",
-            {
-                "PHYSPPI_QBIOLIP_ROOT",
-                "PHYSPPI_AFDB_ROOT",
-                "PHYSPPI_FORMAL_ROOT",
-                "PHYSPPI_OUTPUT_ROOT",
-            },
-        ),
-    ],
+    ("config_path", "run_name", "required_environment"),
+    EXPERIMENT_CONFIG_CASES,
+    ids=[case[0].name for case in EXPERIMENT_CONFIG_CASES],
 )
 def test_real_permutation_alignment_config_loads(
     tmp_path: Path,
-    config_name: str,
+    config_path: Path,
     run_name: str,
     required_environment: set[str],
 ) -> None:
     environ = _make_real_config_inputs(tmp_path)
-    config_path = REPO_ROOT / "configs/experiments/permutation_alignment" / config_name
+    absolute_config_path = REPO_ROOT / config_path
 
     loaded = load_experiment(
-        config_path,
+        absolute_config_path,
         repo_root=REPO_ROOT,
         environ=environ,
         validate_module=True,
@@ -121,47 +190,23 @@ def test_real_permutation_alignment_config_loads(
     assert loaded.config.artifacts.output_dir.is_relative_to(
         Path(environ["PHYSPPI_OUTPUT_ROOT"])
     )
-    assert "/101045/" not in config_path.read_text()
+    assert "/101045/" not in absolute_config_path.read_text()
     assert "/101045/" not in loaded.profile_path.read_text()
 
 
 @pytest.mark.parametrize(
-    ("config_name", "required_environment"),
+    ("config_path", "required_environment"),
     [
-        (
-            "audit_protected_chain_matching.toml",
-            {
-                "PHYSPPI_QBIOLIP_ROOT",
-                "PHYSPPI_AFDB_ROOT",
-                "PHYSPPI_FORMAL_ROOT",
-                "PHYSPPI_COMPONENTS_CIF",
-                "PHYSPPI_OUTPUT_ROOT",
-            },
-        ),
-        (
-            "build_minimal_alignment_arrays.toml",
-            {
-                "PHYSPPI_MSA_CACHE",
-                "PHYSPPI_OUTPUT_ROOT",
-            },
-        ),
-        (
-            "audit_v1_v32_data_errors.toml",
-            {
-                "PHYSPPI_QBIOLIP_ROOT",
-                "PHYSPPI_AFDB_ROOT",
-                "PHYSPPI_FORMAL_ROOT",
-                "PHYSPPI_OUTPUT_ROOT",
-            },
-        ),
+        (config_path, required_environment)
+        for config_path, _, required_environment in EXPERIMENT_CONFIG_CASES
     ],
+    ids=[case[0].name for case in EXPERIMENT_CONFIG_CASES],
 )
 def test_real_permutation_alignment_config_uses_physppi_environment_namespace(
-    config_name: str,
+    config_path: Path,
     required_environment: set[str],
 ) -> None:
-    config_path = REPO_ROOT / "configs/experiments/permutation_alignment" / config_name
-    source = config_path.read_text()
+    source = (REPO_ROOT / config_path).read_text()
     raw = tomllib.loads(source)
     placeholders = set(re.findall(r"\$\{([A-Z_][A-Z0-9_]*)\}", source))
 
@@ -199,13 +244,19 @@ def test_protected_chain_config_requires_reader_index_caches(
 
 
 @pytest.mark.parametrize(
-    "profile_name",
-    ["cpu_debug.toml", "single_gpu_debug.toml"],
+    ("profile_path", "gpus_per_node"),
+    SLURM_PROFILE_CASES,
+    ids=[case[0].name for case in SLURM_PROFILE_CASES],
 )
-def test_real_slurm_profile_has_strict_schema(profile_name: str) -> None:
-    profile_path = REPO_ROOT / "configs/slurm" / profile_name
+def test_real_slurm_profile_resources(
+    profile_path: Path,
+    gpus_per_node: int | None,
+) -> None:
+    absolute_profile_path = REPO_ROOT / profile_path
 
-    profile = SlurmProfileFile.model_validate(tomllib.loads(profile_path.read_text()))
+    profile = SlurmProfileFile.model_validate(
+        tomllib.loads(absolute_profile_path.read_text())
+    )
 
     assert profile.schema_version == 1
     assert profile.slurm.nodes == 1
@@ -216,9 +267,7 @@ def test_real_slurm_profile_has_strict_schema(profile_name: str) -> None:
     assert profile.slurm.partition is None
     assert profile.slurm.account is None
     assert profile.slurm.qos is None
-    assert profile.slurm.gpus_per_node == (
-        1 if profile_name == "single_gpu_debug.toml" else None
-    )
+    assert profile.slurm.gpus_per_node == gpus_per_node
 
 
 def _write_minimal_config(root: Path) -> Path:
