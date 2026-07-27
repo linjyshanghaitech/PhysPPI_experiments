@@ -1,62 +1,57 @@
-# PhysPPI Clean Repository Migration Design
+# PhysPPI 全新代码仓库迁移设计
 
-## Objective
+## 目标
 
-Create a new Git repository at
-`/101045/jinyu/PhysPPI_jinyu/PhysPPI` from the clean source tree at
-`/101045/jinyu/PhysPPI_jinyu/qinwc/openfold-3`.
+以干净的源代码树
+`/101045/jinyu/PhysPPI_jinyu/qinwc/openfold-3` 为基线，在
+`/101045/jinyu/PhysPPI_jinyu/PhysPPI` 创建一个全新的 Git 仓库。
 
-The new repository will:
+新仓库需要满足以下要求：
 
-- start with new Git history on `main`;
-- retain the complete source, tests, environment definitions, and necessary
-  documentation required to reproduce the current implementation;
-- exclude generated output, caches, checkpoints, runtime state, and historical
-  debugging material;
-- preserve runtime behavior during the import;
-- record source commit `4c1c97d13` as provenance.
+- 在 `main` 分支上建立全新的 Git 历史；
+- 保留复现当前实现所需的完整源码、测试、环境定义和必要文档；
+- 排除生成输出、缓存、checkpoint、运行状态和历史调试材料；
+- 导入过程中不改变运行时行为；
+- 将源提交 `4c1c97d13` 记录为代码来源。
 
-No remote will be configured during this migration.
+本次迁移不配置 remote。
 
-## Source State
+## 源仓库状态
 
-The source repository is clean at commit:
+源仓库在以下提交上保持 clean：
 
 ```text
 4c1c97d13 docs(physppi): refresh canonical project handoff
 ```
 
-It is ahead of its upstream remote by nine documentation commits. The import
-uses the current `HEAD`, not `origin/main`, because the current root
-documentation and repository contract are part of the selected baseline.
+该提交比上游 remote 领先 9 个文档提交。本次导入使用当前 `HEAD`，而不是
+`origin/main`，因为当前根目录文档和仓库约定属于已选定的基线。
 
-Only files tracked by this commit are eligible for import. Ignored and
-untracked filesystem content is never used as an import source.
+只有被该提交跟踪的文件才有资格导入。被忽略或未跟踪的文件系统内容绝不能作为
+导入来源。
 
-## Import Method
+## 导入方式
 
-Use a Git allowlist export from the source commit. This is preferred over a
-filesystem copy because it cannot include local caches or untracked files, and
-preferred over exporting everything and deleting a blacklist because the final
-repository boundary is explicit.
+从源提交使用 Git allowlist 导出。与直接复制文件系统相比，这种方式不会带入本地
+缓存或未跟踪文件；与先完整导出再按 blacklist 删除相比，这种方式能够明确限定
+最终仓库边界。
 
-The import must not copy the source `.git` directory or any source remote
-configuration.
+导入过程不得复制源仓库的 `.git` 目录或任何源 remote 配置。
 
-## Included Content
+## 保留内容
 
-Import the following paths when they exist in the source commit:
+当以下路径存在于源提交中时，将其导入。
 
-### Runtime and tests
+### 运行时代码和测试
 
 - `openfold3/`
 - `scripts/`
 - `examples/`
 
-The complete `openfold3/tests/` tree and its test data remain included. Test
-fixtures are source-controlled reproducibility inputs, not generated output.
+完整保留 `openfold3/tests/` 及其测试数据。测试 fixture 是由源码管理的复现输入，
+不是生成输出。
 
-### Build and environment definitions
+### 构建和环境定义
 
 - `pyproject.toml`
 - `pixi.toml`
@@ -66,7 +61,7 @@ fixtures are source-controlled reproducibility inputs, not generated output.
 - `deepspeed_configs/`
 - `devtools/`
 
-### Repository metadata
+### 仓库元数据
 
 - `.dockerignore`
 - `.gitattributes`
@@ -78,12 +73,11 @@ fixtures are source-controlled reproducibility inputs, not generated output.
 - `LICENSE`
 - `README.md`
 
-The imported `.gitignore` will be hardened for the new repository as described
-below.
+导入的 `.gitignore` 将按照下文规则加固。
 
-### Documentation
+### 文档
 
-Keep the general OpenFold3 documentation:
+保留 OpenFold3 通用文档：
 
 - `docs/Makefile`
 - `docs/README.md`
@@ -91,7 +85,7 @@ Keep the general OpenFold3 documentation:
 - `docs/imgs/`
 - `docs/source/`
 
-Keep only these PhysPPI documents:
+仅保留下列 PhysPPI 文档：
 
 - `docs/physppi/baseline_inference.md`
 - `docs/physppi/full_msa_source_and_file_structure.md`
@@ -100,47 +94,43 @@ Keep only these PhysPPI documents:
 - `docs/physppi/refactor/module-map.md`
 - `docs/physppi/verification.md`
 
-These files describe stable interfaces or current module structure. Historical
-handoffs, run reports, reviews, and recovery notes are excluded.
+这些文件描述稳定接口或当前模块结构。历史 handoff、运行报告、review 和恢复记录
+全部排除。
 
-## Excluded Content
+## 排除内容
 
-Do not import:
+不得导入：
 
-- `.git/`;
-- `.pixi/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`;
-- `output/`, `outputs/`, `logs/`, `runs/`, `remote/`, `scratch/`, `work/`;
-- checkpoints and model artifacts such as `*.ckpt`, `*.pt`, and `*.pth`;
-- `state/` and `.superpowers/`;
-- `CURRENT_STATE.md`, `HANDOFF.md`, `INDEX.md`, and `RUNBOOK.md`;
-- the source repository's `docs/superpowers/` history;
-- dated PhysPPI status reports, reviews, handoffs, recovery documents, meeting
-  reports, and historical training records;
-- root `assets/`, which contains publication and promotional media not required
-  by the build, tests, or root README.
+- `.git/`；
+- `.pixi/`、`.venv/`、`__pycache__/`、`.pytest_cache/`、`.ruff_cache/`；
+- `output/`、`outputs/`、`logs/`、`runs/`、`remote/`、`scratch/`、`work/`；
+- `*.ckpt`、`*.pt`、`*.pth` 等 checkpoint 和模型产物；
+- `state/` 和 `.superpowers/`；
+- `CURRENT_STATE.md`、`HANDOFF.md`、`INDEX.md` 和 `RUNBOOK.md`；
+- 源仓库的 `docs/superpowers/` 历史；
+- 带日期的 PhysPPI 状态报告、review、handoff、恢复文档、会议报告和历史训练记录；
+- 根目录 `assets/`。其中包含不参与构建、测试或根 README 的论文和宣传媒体。
 
-The source repository currently tracks approximately 71 MB below `output/`.
-Those files remain excluded even though Git tracks them in the source.
+源仓库当前在 `output/` 下跟踪了大约 71 MB 文件。即使这些文件已被源仓库的 Git
+跟踪，也必须排除。
 
-The migration design stored in the target repository at
+目标仓库中的迁移设计文档
 `docs/superpowers/specs/2026-07-27-physppi-clean-repository-migration-design.md`
-is the sole exception to the source-document exclusion. It documents the new
-repository's provenance and was not imported from the old repository.
+是排除源文档规则的唯一例外。它记录新仓库的来源，并非从旧仓库导入。
 
-## Ignore Policy
+## 忽略规则
 
-The new `.gitignore` must retain the useful upstream rules and additionally
-exclude:
+新 `.gitignore` 必须保留有效的上游规则，并额外排除：
 
 ```gitignore
-# Local environments and caches
+# 本地环境和缓存
 .pixi/
 .venv/
 .pytest_cache/
 .ruff_cache/
 **/__pycache__/
 
-# Runtime data and generated artifacts
+# 运行数据和生成产物
 output/
 outputs/
 logs/
@@ -150,7 +140,7 @@ scratch/
 state/
 work/
 
-# Model artifacts and local configuration
+# 模型产物和本地配置
 *.ckpt
 *.pt
 *.pth
@@ -159,82 +149,71 @@ work/
 .env.*
 ```
 
-Tracked test fixtures such as `.npz`, `.cif`, and alignment files must not be
-globally ignored.
+不得全局忽略已被跟踪的 `.npz`、`.cif` 和 alignment 文件等测试 fixture。
 
-## Permutation Alignment Review
+## 排列对齐审阅结论
 
-The migration does not delete chain-level permutation alignment.
+本次迁移不删除链级 permutation alignment。
 
-The proposed deletion was based on a valid but insufficient observation:
-prediction tokens and ground-truth tokens originate from the same processed
-structure, so a source-order identity correspondence exists. That observation
-does not imply that identity correspondence is the correct geometric
-assignment for the model output.
+此前建议删除它的依据包含一个正确但不充分的观察：prediction token 和
+ground-truth token 来自同一个已处理结构，因此一定存在按源顺序对应的 identity
+mapping。但这并不能推出该 identity mapping 就是模型输出在几何上的正确分配。
 
-For identical chains, PDB chain names are arbitrary labels. A mini-rollout can
-place the coordinates associated with one identical-chain token block at the
-physical site occupied by another identical chain. `token_index` identifies
-the token block; it does not constrain which symmetry-equivalent physical site
-the generated coordinates occupy.
+对于相同链，PDB chain name 是任意标签。mini-rollout 可能把某个相同链 token block
+对应的坐标生成在另一个相同链所占据的物理位置上。`token_index` 只能标识 token
+block，不能约束生成坐标最终占据哪个对称等价的物理位置。
 
-This is explicitly part of AlphaFold3 Supplementary Methods 4.2: the
-mini-rollout prediction is used to permute symmetric ground-truth chains and
-ligands before confidence and diffusion supervision. It is not merely an
-unchanged AlphaFold2 artifact.
+AlphaFold3 Supplementary Methods 4.2 明确包含这一过程：在 confidence 和
+diffusion supervision 之前，使用 mini-rollout prediction 对对称的 ground-truth
+链和 ligand 进行 permutation。因此，它并不是一个未经重新审视、原样遗留的
+AlphaFold2 组件。
 
-The current source has already replaced the fragile legacy greedy assignment
-on the training route with protected matching:
+当前源代码已经在训练路径中用 protected matching 替代了脆弱的 legacy greedy
+assignment：
 
-- sequence and molecule-type compatibility are hard constraints;
-- deterministic Hungarian assignment replaces unbounded or unsafe matching;
-- a candidate permutation is accepted only when it improves RMSD over the
-  identity baseline;
-- typed matcher failures use a sequence-compatible identity fallback;
-- configured loss weights are preserved;
-- Kabsch alignment and within-component atom symmetry resolution remain.
+- sequence 和 molecule type compatibility 是硬约束；
+- 使用确定性的 Hungarian assignment 代替无界或不安全的 matching；
+- candidate permutation 只有在 RMSD 优于 identity baseline 时才会被接受；
+- typed matcher failure 使用 sequence-compatible identity fallback；
+- 保留配置中的 loss weight；
+- 保留 Kabsch alignment 和 component 内部的 atom symmetry resolution。
 
-The correct baseline for later work is therefore:
+因此，后续工作的正确基线是：
 
-1. retain protected chain matching;
-2. retain Kabsch coordinate alignment;
-3. retain residue and ligand atom-level symmetry resolution;
-4. investigate `mol_*` label construction independently where evidence shows
-   it remains faulty;
-5. add GT `asym_id`, `entity_id`, or `sym_id` only for a defined consumer or
-   diagnostic contract, not as a replacement for symmetry-aware chain
-   matching.
+1. 保留 protected chain matching；
+2. 保留 Kabsch coordinate alignment；
+3. 保留 residue 和 ligand 的 atom-level symmetry resolution；
+4. 在证据表明 `mol_*` label 构造仍有缺陷时，独立调查该问题；
+5. 只有存在明确 consumer 或 diagnostic contract 时，才给 GT 添加 `asym_id`、
+   `entity_id` 或 `sym_id`，不能用它们代替 symmetry-aware chain matching。
 
-Any later alignment simplification requires a failing regression fixture and a
-comparison against the current protected identity baseline.
+以后如需简化 alignment，必须先提供能够失败的 regression fixture，并与当前
+protected identity baseline 进行比较。
 
-## Behavior Preservation
+## 行为保持
 
-The initial import does not rewrite machine-local defaults or operational
-paths embedded in existing source and documentation. Although those paths
-reduce portability outside the current environment, changing them during the
-repository import would mix behavior changes with provenance establishment.
+初始导入不改写现有源码和文档中针对当前机器的默认值或操作路径。虽然这些路径降低
+了代码在当前环境以外的可移植性，但在仓库导入时修改它们会把行为变更和来源基线的
+建立混在一起。
 
-Path portability, README generalization, and runtime configuration cleanup
-will be handled as subsequent, independently tested changes in the new
-repository.
+路径可移植性、README 通用化和运行时配置清理将在新仓库中作为后续独立变更处理，
+并分别测试。
 
-## Verification
+## 验证要求
 
-Before the import commit is considered complete:
+导入提交只有在满足以下条件后才能视为完成：
 
-1. Confirm the source repository is still clean at `4c1c97d13`.
-2. Confirm the target has no Git remote and no source history.
-3. Confirm all target files are within the approved allowlist.
-4. Confirm excluded artifact and state paths are absent.
-5. Confirm no tracked file exceeds GitHub's 100 MB per-file limit.
-6. Confirm no checkpoint or environment-secret file is tracked.
-7. Confirm the `openfold3` package imports from the target tree.
-8. Run focused permutation and protected-chain matching tests.
-9. Run a representative repository test subset that does not require external
-   datasets, checkpoints, GPUs, or network services.
-10. Confirm `git status --short --branch` is clean after the import commit.
+1. 确认源仓库仍然 clean，且位于 `4c1c97d13`。
+2. 确认目标仓库没有 Git remote，也没有源仓库历史。
+3. 确认目标仓库中的所有文件都位于已批准的 allowlist 内。
+4. 确认被排除的产物和状态路径不存在。
+5. 确认没有被跟踪的文件超过 GitHub 单文件 100 MB 限制。
+6. 确认没有跟踪 checkpoint 或包含环境 secret 的文件。
+7. 确认可以从目标代码树导入 `openfold3` package。
+8. 运行聚焦于 permutation 和 protected-chain matching 的测试。
+9. 运行一组有代表性的仓库测试；这些测试不得依赖外部数据集、checkpoint、GPU
+   或网络服务。
+10. 在导入提交后确认 `git status --short --branch` clean。
 
-If a verification failure reveals a source behavior defect rather than an
-import defect, record it without silently changing runtime behavior in the
-migration commit.
+如果验证失败揭示的是源代码行为缺陷，而不是导入缺陷，应记录该问题，不得在迁移
+提交中静默修改运行时行为。
