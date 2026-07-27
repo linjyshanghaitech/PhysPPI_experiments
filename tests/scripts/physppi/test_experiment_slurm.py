@@ -777,6 +777,7 @@ def test_prepare_run_never_invokes_sbatch(
     ("stdout", "expected_job_id"),
     [
         ("12345", "12345"),
+        ("12345\r\n", "12345"),
         ("12345;cluster\n", "12345"),
     ],
 )
@@ -825,6 +826,10 @@ def test_submit_run_records_only_valid_job_id(
         "12345;cluster\nextra",
         "12345;cluster\0",
         "12345;cluster\x7f",
+        "12345 ",
+        "12345\t",
+        "12345;cluster \n",
+        "12345\n\n",
     ],
 )
 def test_submit_run_rejects_invalid_job_id(

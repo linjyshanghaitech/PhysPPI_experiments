@@ -411,7 +411,7 @@ def _submit_run_locked(
         )
 
     match = re.fullmatch(
-        r"(?P<job_id>[0-9]+)(?:;[A-Za-z0-9_.-]+)?[ \t]*(?:\r?\n)?",
+        r"(?P<job_id>[0-9]+)(?:;[A-Za-z0-9_.-]+)?(?:\r?\n)?",
         result.stdout or "",
     )
     if match is None:
