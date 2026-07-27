@@ -111,11 +111,7 @@ def build_preflight_dataset(
     config_class = QBioLiP10kConfig if dataset is DatasetName.QBIOLIP else AFDB10kConfig
     config = config_class.model_validate(
         {
-            "name": (
-                "qbiolip10k"
-                if dataset is DatasetName.QBIOLIP
-                else "afdb10k"
-            ),
+            "name": ("qbiolip10k" if dataset is DatasetName.QBIOLIP else "afdb10k"),
             "dataset_paths": {
                 "dataset_cache_file": dataset_cache,
                 "alignments_directory": None,

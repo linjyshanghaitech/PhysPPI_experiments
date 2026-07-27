@@ -43,9 +43,7 @@ def audit_dataset(root: Path, sample_ids: list[str]) -> dict[str, object]:
         found.add(sample_id)
         gt_path = prior_path.parents[1] / "gt" / f"{sample_id}.pdb"
         for record in _invalid_charge_fields(gt_path):
-            records.append(
-                {"sample_id": sample_id, "path": str(gt_path), **record}
-            )
+            records.append({"sample_id": sample_id, "path": str(gt_path), **record})
     return {
         "selected": len(selected),
         "found": len(found),
@@ -71,9 +69,7 @@ def main() -> None:
             "qbiolip": audit_dataset(
                 args.qbiolip_root, datasets["qbiolip"]["train_ids"]
             ),
-            "afdb": audit_dataset(
-                args.afdb_root, datasets["afdb"]["train_ids"]
-            ),
+            "afdb": audit_dataset(args.afdb_root, datasets["afdb"]["train_ids"]),
         },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

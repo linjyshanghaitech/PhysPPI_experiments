@@ -64,7 +64,9 @@ def _fixed_estimator() -> DirectedMembranePlaneEstimator:
 
 
 def _rotation() -> torch.Tensor:
-    q, _ = torch.linalg.qr(torch.tensor([[1.0, 2.0, 3.0], [0.0, 1.0, 4.0], [5.0, 6.0, 0.0]]))
+    q, _ = torch.linalg.qr(
+        torch.tensor([[1.0, 2.0, 3.0], [0.0, 1.0, 4.0], [5.0, 6.0, 0.0]])
+    )
     if torch.linalg.det(q) < 0:
         q[:, 0] = -q[:, 0]
     return q
@@ -85,11 +87,17 @@ def test_directed_plane_estimator_is_se3_equivariant():
 
     assert torch.allclose(second.normal, first.normal @ rotation, atol=1e-5)
     assert torch.allclose(
-        second.offset, first.offset + (first.normal @ rotation * translation).sum(-1), atol=1e-5
+        second.offset,
+        first.offset + (first.normal @ rotation * translation).sum(-1),
+        atol=1e-5,
     )
     assert torch.allclose(second.signed_depth, first.signed_depth, atol=1e-5)
-    assert torch.allclose(second.normal_error_logits, first.normal_error_logits, atol=1e-5)
-    assert torch.allclose(second.offset_error_logits, first.offset_error_logits, atol=1e-5)
+    assert torch.allclose(
+        second.normal_error_logits, first.normal_error_logits, atol=1e-5
+    )
+    assert torch.allclose(
+        second.offset_error_logits, first.offset_error_logits, atol=1e-5
+    )
     assert estimator.normal_error.out_features == 16
 
 
@@ -97,9 +105,9 @@ def test_directed_plane_estimator_preserves_large_translation_under_bf16_autocas
     estimator = _fixed_estimator()
     base = _geometry_case()
     translated = dict(base)
-    translated["monomer_atom_positions"] = (
-        base["monomer_atom_positions"] + torch.tensor([10000.0, -7000.0, 4000.0])
-    )
+    translated["monomer_atom_positions"] = base[
+        "monomer_atom_positions"
+    ] + torch.tensor([10000.0, -7000.0, 4000.0])
 
     with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
         first = estimator(**base)
@@ -150,7 +158,9 @@ def test_gather_helpers_return_zero_for_invalid_indices():
     triplets = gather_backbone_triplets(
         positions, torch.tensor([[[0, 1, 2], [0, -1, 1]]])
     )
-    assert torch.equal(torch.stack([part[0, 1] for part in triplets]), torch.zeros(3, 3))
+    assert torch.equal(
+        torch.stack([part[0, 1] for part in triplets]), torch.zeros(3, 3)
+    )
     assert torch.equal(center_valid, torch.tensor([[True, False, False]]))
 
 
@@ -285,12 +295,12 @@ def test_membrane_conditioner_broadcasts_one_plane_over_48_diffusion_samples():
         normal=base_prediction.normal.expand(2, -1).unsqueeze(1),
         offset=base_prediction.offset.expand(2).unsqueeze(1),
         signed_depth=base_prediction.signed_depth.expand(2, -1).unsqueeze(1),
-        normal_error_logits=base_prediction.normal_error_logits.expand(
-            2, -1
-        ).unsqueeze(1),
-        offset_error_logits=base_prediction.offset_error_logits.expand(
-            2, -1
-        ).unsqueeze(1),
+        normal_error_logits=base_prediction.normal_error_logits.expand(2, -1).unsqueeze(
+            1
+        ),
+        offset_error_logits=base_prediction.offset_error_logits.expand(2, -1).unsqueeze(
+            1
+        ),
         valid=torch.tensor([[True], [False]]),
     )
 
@@ -367,8 +377,6 @@ def test_model_plane_wiring_passes_only_monomer_input_geometry():
         batch=batch,
         token_mask=case["token_mask"],
     )
-    assert captured["monomer_atom_positions"] is batch[
-        "physppi_monomer_atom_positions"
-    ]
+    assert captured["monomer_atom_positions"] is batch["physppi_monomer_atom_positions"]
     assert captured["monomer_atom_mask"] is batch["physppi_monomer_atom_mask"]
     assert "atom_positions" not in captured

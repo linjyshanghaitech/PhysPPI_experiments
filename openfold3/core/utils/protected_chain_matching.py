@@ -342,9 +342,7 @@ def align_chain_residues(pred: ChainRecord, gt: ChainRecord) -> ResidueAlignment
         target_rows: list[int] = []
         seen_source_keys: set[tuple[int, str]] = set()
         has_conflict = False
-        for source_row, (_, residue_id, insertion_code) in enumerate(
-            pred.residue_keys
-        ):
+        for source_row, (_, residue_id, insertion_code) in enumerate(pred.residue_keys):
             key = (residue_id, insertion_code)
             if key in seen_source_keys:
                 raise ProtectedChainMatchError("duplicate_source_residue_key")
@@ -355,9 +353,7 @@ def align_chain_residues(pred: ChainRecord, gt: ChainRecord) -> ResidueAlignment
             pred_identity = _canonical_residue(
                 pred.polymer_type, pred.sequence[source_row]
             )
-            gt_identity = _canonical_residue(
-                gt.polymer_type, gt.sequence[target_row]
-            )
+            gt_identity = _canonical_residue(gt.polymer_type, gt.sequence[target_row])
             if (
                 pred_identity is not None
                 and gt_identity is not None

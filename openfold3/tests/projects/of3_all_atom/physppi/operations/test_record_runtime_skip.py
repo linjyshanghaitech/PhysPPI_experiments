@@ -65,9 +65,7 @@ def test_records_failed_sample_without_mutating_source_manifest() -> None:
 
 def test_does_not_duplicate_an_existing_runtime_skip() -> None:
     manifest = {
-        "datasets": {
-            "qbiolip": {"train_ids": [], "fatal_ids": ["failed"]}
-        },
+        "datasets": {"qbiolip": {"train_ids": [], "fatal_ids": ["failed"]}},
         "runtime_skips": [
             {
                 "dataset": "qbiolip",
@@ -134,14 +132,17 @@ def test_append_failure_record_accepts_legacy_fingerprint_rows(
         + "\n"
     )
 
-    assert module.append_failure_record(
-        ledger,
-        {
-            "dataset": "qbiolip",
-            "sample_id": "fresh",
-            "failure_fingerprint": "new-schema-fingerprint",
-        },
-    ) is True
+    assert (
+        module.append_failure_record(
+            ledger,
+            {
+                "dataset": "qbiolip",
+                "sample_id": "fresh",
+                "failure_fingerprint": "new-schema-fingerprint",
+            },
+        )
+        is True
+    )
     assert len(ledger.read_text().splitlines()) == 2
 
 
@@ -228,10 +229,11 @@ def test_cli_records_versioned_sample_exclusion_and_ledger(
     assert record["optimizer_step"] == 3
     assert record["micro_step"] == 7
     assert record["git_head"] == "deadbeef"
-    assert record["manifest_sha256"] == hashlib.sha256(
-        manifest_path.read_bytes()
-    ).hexdigest()
+    assert (
+        record["manifest_sha256"]
+        == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    )
     assert record["yaml_sha256"] == hashlib.sha256(yaml_path.read_bytes()).hexdigest()
-    assert record["source_log_sha256"] == hashlib.sha256(
-        log_path.read_bytes()
-    ).hexdigest()
+    assert (
+        record["source_log_sha256"] == hashlib.sha256(log_path.read_bytes()).hexdigest()
+    )

@@ -141,9 +141,7 @@ def test_per_candidate_dockq_derives_atomized_inputs_from_training_batch(monkeyp
         "is_atomized": torch.zeros(1, 1, 2, dtype=torch.bool),
         "ground_truth": {
             "atom_resolved_mask": torch.tensor([[[True, True, False, True]]]),
-            "inter_filter_atomized": torch.ones(
-                1, 1, 4, 4, dtype=torch.bool
-            ),
+            "inter_filter_atomized": torch.ones(1, 1, 4, 4, dtype=torch.bool),
         },
     }
 
@@ -158,9 +156,7 @@ def test_per_candidate_dockq_derives_atomized_inputs_from_training_batch(monkeyp
     assert captured["all_atom_mask"].tolist() == [
         [[True, True, False, True], [True, True, False, True]]
     ]
-    assert captured["asym_id_atomized"].tolist() == [
-        [[1, 1, 2, 2], [1, 1, 2, 2]]
-    ]
+    assert captured["asym_id_atomized"].tolist() == [[[1, 1, 2, 2], [1, 1, 2, 2]]]
     assert captured["res_id_atomized"].tolist() == [
         [[10, 10, 20, 20], [10, 10, 20, 20]]
     ]

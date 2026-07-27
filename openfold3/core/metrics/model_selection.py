@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def compute_valid_model_selection_metrics(
-        confidence_config: ConfigDict,
+    confidence_config: ConfigDict,
     outputs: dict,
     metrics: dict,
 ) -> dict:

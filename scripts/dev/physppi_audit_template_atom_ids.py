@@ -72,15 +72,12 @@ def build_filtered_manifest(
     qbiolip = filtered["datasets"]["qbiolip"]
     skipped = set(skipped_sample_ids)
     qbiolip["train_ids"] = [
-        sample_id
-        for sample_id in qbiolip["train_ids"]
-        if sample_id not in skipped
+        sample_id for sample_id in qbiolip["train_ids"] if sample_id not in skipped
     ]
     qbiolip["fatal_ids"] = sorted(set(qbiolip["fatal_ids"]) | skipped)
     runtime_skips = filtered.setdefault("runtime_skips", [])
     recorded = {
-        (entry.get("dataset"), entry.get("sample_id"))
-        for entry in runtime_skips
+        (entry.get("dataset"), entry.get("sample_id")) for entry in runtime_skips
     }
     for sample_id in sorted(skipped):
         key = ("qbiolip", sample_id)

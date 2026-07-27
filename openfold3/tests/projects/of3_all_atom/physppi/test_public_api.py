@@ -11,13 +11,9 @@ PUBLIC_SYMBOLS = {
     "interaction_auxiliary_loss": "openfold3.projects.of3_all_atom.physppi",
     "DirectedMembranePlaneEstimator": "openfold3.projects.of3_all_atom.physppi",
     "MembraneDiffusionConditioner": "openfold3.projects.of3_all_atom.physppi",
-    "QBioLiP10kReader": (
-        "openfold3.projects.of3_all_atom.physppi.data"
-    ),
+    "QBioLiP10kReader": ("openfold3.projects.of3_all_atom.physppi.data"),
     "AFDB10kReader": "openfold3.projects.of3_all_atom.physppi.data",
-    "PriorComplexSample": (
-        "openfold3.projects.of3_all_atom.physppi.data"
-    ),
+    "PriorComplexSample": ("openfold3.projects.of3_all_atom.physppi.data"),
     "PhysPPIPriorComplexDatasetAdapter": (
         "openfold3.projects.of3_all_atom.physppi.data"
     ),

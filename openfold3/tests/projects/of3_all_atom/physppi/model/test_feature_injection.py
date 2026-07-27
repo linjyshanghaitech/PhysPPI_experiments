@@ -50,9 +50,7 @@ def test_injection_copies_surface_charge_mask():
 
 def test_injection_copies_tm_source_provenance():
     base = {"token_mask": torch.ones(1, 2, dtype=torch.bool)}
-    out = inject_physppi_features(
-        base, {"physppi_tm_provenance": torch.tensor([True])}
-    )
+    out = inject_physppi_features(base, {"physppi_tm_provenance": torch.tensor([True])})
 
     assert torch.equal(out["physppi_tm_provenance"], torch.tensor([True]))
 
@@ -64,9 +62,7 @@ def test_active_contact_requires_symmetric_pair_mask():
         "physppi_contact_selected": torch.tensor([True]),
         "physppi_contact_valid": torch.tensor([True]),
         "physppi_contact_active": torch.tensor([True]),
-        "physppi_contact_pair_mask": torch.tensor(
-            [[[False, True], [True, False]]]
-        ),
+        "physppi_contact_pair_mask": torch.tensor([[[False, True], [True, False]]]),
     }
 
     validate_optional_prior_features(batch)

@@ -88,9 +88,9 @@ def directed_membrane_plane_loss(
             predicted_offset.shape, device=predicted_offset.device, dtype=torch.bool
         )
     else:
-        valid_mask = torch.as_tensor(
-            valid, device=predicted_offset.device
-        ).bool().reshape(-1)
+        valid_mask = (
+            torch.as_tensor(valid, device=predicted_offset.device).bool().reshape(-1)
+        )
         if valid_mask.numel() != predicted_normal.shape[0]:
             raise ValueError(
                 "physppi_membrane_gt_valid must contain one value per target normal, "
@@ -99,9 +99,11 @@ def directed_membrane_plane_loss(
     if predicted_valid is None:
         predicted_valid_mask = torch.ones_like(valid_mask)
     else:
-        predicted_valid_mask = torch.as_tensor(
-            predicted_valid, device=predicted_offset.device
-        ).bool().reshape(-1)
+        predicted_valid_mask = (
+            torch.as_tensor(predicted_valid, device=predicted_offset.device)
+            .bool()
+            .reshape(-1)
+        )
         if predicted_valid_mask.numel() != predicted_normal.shape[0]:
             raise ValueError(
                 "physppi_predicted_membrane_valid must contain one value per "

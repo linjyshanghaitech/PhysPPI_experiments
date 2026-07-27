@@ -29,9 +29,7 @@ def test_empty_interaction_batch_has_exact_zero_auxiliary_loss():
     prediction = torch.randn(1, 3, 3, requires_grad=True)
     loss = interaction_auxiliary_loss(
         batch={
-            "physppi_interaction_aux_valid": torch.zeros(
-                1, 3, 3, dtype=torch.bool
-            ),
+            "physppi_interaction_aux_valid": torch.zeros(1, 3, 3, dtype=torch.bool),
             "physppi_interaction_distance": torch.zeros(1, 3, 3),
         },
         output={"interaction_distance_pred": prediction},
@@ -42,17 +40,13 @@ def test_empty_interaction_batch_has_exact_zero_auxiliary_loss():
 
 
 def test_valid_interaction_distance_is_supervised():
-    prediction = torch.tensor(
-        [[[0.0, 1.0], [1.0, 0.0]]], requires_grad=True
-    )
+    prediction = torch.tensor([[[0.0, 1.0], [1.0, 0.0]]], requires_grad=True)
     loss = interaction_auxiliary_loss(
         batch={
             "physppi_interaction_aux_valid": torch.tensor(
                 [[[False, True], [True, False]]]
             ),
-            "physppi_interaction_distance": torch.tensor(
-                [[[0.0, 2.0], [2.0, 0.0]]]
-            ),
+            "physppi_interaction_distance": torch.tensor([[[0.0, 2.0], [2.0, 0.0]]]),
         },
         output={"interaction_distance_pred": prediction},
         distance_weight=2.0,

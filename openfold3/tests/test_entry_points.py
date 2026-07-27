@@ -176,6 +176,7 @@ class TestTrainingExperiment:
         assert len(expt_runner.loggers) == 1
         assert isinstance(expt_runner.loggers[0], CSVLogger)
         assert expt_runner.loggers[0].save_dir == str(expt_runner.output_dir)
+
     def test_model(self, expt_runner):
         # Check model creation
 

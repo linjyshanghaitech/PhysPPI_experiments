@@ -13,7 +13,9 @@ from openfold3.projects.of3_all_atom.physppi.screening.models import (
 
 def _structure_module() -> ModuleType:
     try:
-        return importlib.import_module("openfold3.projects.of3_all_atom.physppi.screening.structure")
+        return importlib.import_module(
+            "openfold3.projects.of3_all_atom.physppi.screening.structure"
+        )
     except ModuleNotFoundError as exc:
         pytest.fail(f"structure validator is missing: {exc}")
 

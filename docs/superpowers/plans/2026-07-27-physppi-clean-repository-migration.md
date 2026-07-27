@@ -300,10 +300,12 @@ PYTHONPATH=/101045/jinyu/PhysPPI_jinyu/PhysPPI \
   check openfold3 scripts
 ```
 
-预期：测试全部通过。Ruff 在
+预期：测试全部通过。Ruff 最初在
 `openfold3/tests/core/data/tools/test_rscb.py:19` 报告一个源提交中可复现的未使用
-`pytest` import（F401）；在 `SOURCE_PROVENANCE.md` 中记录该基线问题，不在迁移
-提交中修改模型行为。
+`pytest` import（F401）；在源码基线提交中保留并记录该问题，随后用独立的零行为
+变更提交删除该 import。`ruff format --check` 还在源提交中发现 47 个未格式化
+文件；源码基线提交后使用锁定环境中的 Ruff 机械格式化，并以独立提交保存。最终
+lint 和 format check 都必须通过。
 
 ## Task 5：提交并推送
 

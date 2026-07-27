@@ -160,20 +160,18 @@ def test_adapter_emits_latest_contract_feature_keys(monkeypatch):
     interaction_call = {}
 
     def fake_interaction(*args, **kwargs):
-            interaction_call["atom_array"] = kwargs.get("atom_array")
-            return {
-                "type_mask": np.zeros((2, 2, 7), dtype=bool),
-                "valid": True,
-                "aux": ((0, 1, 0, 3.5, ("N",), ("O",)),),
-            }
+        interaction_call["atom_array"] = kwargs.get("atom_array")
+        return {
+            "type_mask": np.zeros((2, 2, 7), dtype=bool),
+            "valid": True,
+            "aux": ((0, 1, 0, 3.5, ("N",), ("O",)),),
+        }
 
     monkeypatch.setattr(
         module,
         "build_contact_features",
         lambda *args, **kwargs: {
-            "pair_mask": np.asarray(
-                [[False, True], [True, False]], dtype=bool
-            ),
+            "pair_mask": np.asarray([[False, True], [True, False]], dtype=bool),
             "valid": True,
         },
     )
@@ -265,9 +263,7 @@ def test_adapter_truncates_later_slots_after_invalid_middle_prior(monkeypatch):
         module,
         "build_contact_features",
         lambda *args, **kwargs: {
-            "pair_mask": np.asarray(
-                [[False, True], [True, False]], dtype=bool
-            ),
+            "pair_mask": np.asarray([[False, True], [True, False]], dtype=bool),
             "valid": True,
         },
     )
@@ -309,8 +305,7 @@ def test_adapter_truncates_later_slots_after_invalid_middle_prior(monkeypatch):
     atom_array = AtomArray(2)
     atom_array.chain_id = np.asarray(["A", "B"])
     states = {
-        slot: SlotState(True, True, True, "source")
-        for slot in PRIOR_OPTIONAL_SLOTS
+        slot: SlotState(True, True, True, "source") for slot in PRIOR_OPTIONAL_SLOTS
     }
 
     result = adapter.build_prior_features(

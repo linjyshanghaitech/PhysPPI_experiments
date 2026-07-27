@@ -19,14 +19,11 @@ V4_SPLIT_BACKBONE = Path(
     "/101045/jinyu/PhysPPI/prior_processed/v4-Qbiolip-M/split_backbone"
 )
 DEFAULT_COVERAGE = (
-    BASE
-    / "output/physppi_cmap_only_research/broad_eval_inputs/"
+    BASE / "output/physppi_cmap_only_research/broad_eval_inputs/"
     "query_coverage_report.json"
 )
 DEFAULT_OUTPUT = (
-    BASE
-    / "output/physppi_cmap_only_research/broad_eval_inputs/"
-    "missing_test128_msa"
+    BASE / "output/physppi_cmap_only_research/broad_eval_inputs/missing_test128_msa"
 )
 MSA_SETTINGS = BASE / "output/physppi_full_msa_cache/msa_server_full.yml"
 PIXI = Path("/101045/jinyu/.pixi/bin/pixi")
@@ -199,8 +196,11 @@ def main() -> None:
             query_json = pending.pop(0)
             proc = launch_chunk(query_json, args.output_dir, log_dir)
             running[query_json.stem] = proc
-            print(f"[{datetime.now().isoformat(timespec='seconds')}] launched "
-                  f"{query_json.stem} pid={proc.pid}", flush=True)
+            print(
+                f"[{datetime.now().isoformat(timespec='seconds')}] launched "
+                f"{query_json.stem} pid={proc.pid}",
+                flush=True,
+            )
             time.sleep(args.launch_delay_sec)
 
         still_running = {}
@@ -211,8 +211,11 @@ def main() -> None:
                 continue
             if rc != 0:
                 failures[name] = rc
-            print(f"[{datetime.now().isoformat(timespec='seconds')}] finished "
-                  f"{name} rc={rc}", flush=True)
+            print(
+                f"[{datetime.now().isoformat(timespec='seconds')}] finished "
+                f"{name} rc={rc}",
+                flush=True,
+            )
         running = still_running
         if pending or running:
             time.sleep(60)

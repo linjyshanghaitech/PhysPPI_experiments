@@ -169,8 +169,7 @@ def materialize_sampler_prefix(
         dataset_key = str(physppi["manifest_dataset_key"])
         partition = str(physppi["manifest_partition"])
         sample_ids = [
-            str(sample_id)
-            for sample_id in manifest["datasets"][dataset_key][partition]
+            str(sample_id) for sample_id in manifest["datasets"][dataset_key][partition]
         ]
         datasets.append(_PrefixDataset(name, sample_ids, dataset_key))
         weights.append(float(dataset_config["weight"]))
@@ -210,9 +209,7 @@ def materialize_sampler_prefix(
                     "sample_id": sample_id,
                     "occurrence_seed": occurrence_rng.seed,
                     "requested_level": int(occurrence_rng.slots.integers(0, 5)),
-                    "contact_cutoff": float(
-                        occurrence_rng.contact.uniform(8.0, 18.0)
-                    ),
+                    "contact_cutoff": float(occurrence_rng.contact.uniform(8.0, 18.0)),
                 }
             )
         rows_by_rank[rank] = rows
@@ -244,9 +241,7 @@ def verify_sampler_prefix(
     """Prove formal data assignments are the exact deterministic smoke prefix."""
     formal_config = yaml.safe_load(formal_config_path.read_text())
     run_dir = _run_dir_for_trace(smoke_trace_dir)
-    artifacts = json.loads(
-        (run_dir / "evidence" / "artifact-hashes.json").read_text()
-    )
+    artifacts = json.loads((run_dir / "evidence" / "artifact-hashes.json").read_text())
     smoke_config_path = Path(artifacts["runner_yaml"]["path"])
     smoke_config = yaml.safe_load(smoke_config_path.read_text())
     if _semantic_parity_projection(formal_config) != _semantic_parity_projection(
@@ -279,9 +274,7 @@ def verify_sampler_prefix(
     for rank, expected_rows in expected_formal.items():
         path = smoke_trace_dir / f"rank-{rank}.jsonl"
         actual_rows = [
-            json.loads(line)
-            for line in path.read_text().splitlines()
-            if line.strip()
+            json.loads(line) for line in path.read_text().splitlines() if line.strip()
         ]
         if len(actual_rows) < prefix_micro_steps:
             raise ValueError(
@@ -318,10 +311,7 @@ def verify_sampler_prefix(
             effective_levels.add(effective_level)
 
     for micro_step in range(prefix_micro_steps):
-        ids = {
-            expected_formal[rank][micro_step]["sample_id"]
-            for rank in range(8)
-        }
+        ids = {expected_formal[rank][micro_step]["sample_id"] for rank in range(8)}
         if len(ids) != 8:
             raise ValueError(f"duplicate rank-group ID at micro_step={micro_step}")
 

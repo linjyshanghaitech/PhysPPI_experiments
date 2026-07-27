@@ -73,9 +73,7 @@ def scan_pdb(path: Path, *, surface_neighbors: int) -> dict[str, Any]:
             residue_names[residue_key].add(line[17:20].strip())
 
     token_count = len(residue_names)
-    microheterogeneous = sum(
-        len(names) > 1 for names in residue_names.values()
-    )
+    microheterogeneous = sum(len(names) > 1 for names in residue_names.values())
     return {
         "atom_record_count": atom_records,
         "token_count": token_count,
@@ -157,13 +155,9 @@ def run_scan(args: argparse.Namespace) -> dict[str, Any]:
         "qbiolip": QBioLiP10kReader(
             args.qbiolip_root, index_cache_file=args.qbiolip_index_cache
         ),
-        "afdb": AFDB10kReader(
-            args.afdb_root, index_cache_file=args.afdb_index_cache
-        ),
+        "afdb": AFDB10kReader(args.afdb_root, index_cache_file=args.afdb_index_cache),
     }
-    ids = {
-        dataset: list(reader.sample_ids()) for dataset, reader in readers.items()
-    }
+    ids = {dataset: list(reader.sample_ids()) for dataset, reader in readers.items()}
     if {dataset: len(values) for dataset, values in ids.items()} != {
         "qbiolip": 10000,
         "afdb": 10000,
@@ -212,9 +206,9 @@ def run_scan(args: argparse.Namespace) -> dict[str, Any]:
     for index, sample_id in enumerate(ids["qbiolip"], 1):
         event_count = 0
         for path in template_paths.get(sample_id, []):
-            event_count += scan_pdb(
-                path, surface_neighbors=args.surface_neighbors
-            )["nonincreasing_atom_id_count"]
+            event_count += scan_pdb(path, surface_neighbors=args.surface_neighbors)[
+                "nonincreasing_atom_id_count"
+            ]
         if event_count:
             nonincreasing_template.append(sample_id)
             template_event_counts[sample_id] = event_count
@@ -240,9 +234,7 @@ def run_scan(args: argparse.Namespace) -> dict[str, Any]:
 
     categories = {
         "canonical_residue_mapping_fatal": category_payload(
-            qbiolip_ids=_canonical_fatal_ids(
-                args.qbiolip_canonical_report, "qbiolip"
-            ),
+            qbiolip_ids=_canonical_fatal_ids(args.qbiolip_canonical_report, "qbiolip"),
             afdb_ids=_canonical_fatal_ids(args.afdb_canonical_report, "afdb"),
             source="canonical_prior_full_10k_audits",
             severity="fatal_data",

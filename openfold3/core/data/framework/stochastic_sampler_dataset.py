@@ -370,9 +370,7 @@ class OF3DistributedSampler(DistributedSampler):
             # the supported epoch range, so an epoch_len=512 smoke is an exact
             # prefix of an epoch_len=4096 formal run.
             generator = torch.Generator().manual_seed(
-                self.seed
-                + self.epoch
-                + chunk_idx * self._DISTINCT_CHUNK_SEED_STRIDE
+                self.seed + self.epoch + chunk_idx * self._DISTINCT_CHUNK_SEED_STRIDE
             )
             dataset_indices_i = self.get_dataset_indices(
                 generator=generator,

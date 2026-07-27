@@ -147,8 +147,7 @@ def _production_options(output_root: Path) -> ScreeningOptions:
         manifests_dir=_MANIFEST_ROOT,
         runtime_ledger=_MANIFEST_ROOT / "runtime-failure-ledger.jsonl",
         prior_audit=(
-            _FORMAL_ROOT
-            / "audits/v1-v32-full-20k-data-errors/data-error-ids.json"
+            _FORMAL_ROOT / "audits/v1-v32-full-20k-data-errors/data-error-ids.json"
         ),
         components_cif=_COMPONENTS_CIF,
         reference_molecule_directory=_REFERENCE_MOLECULES,
@@ -166,9 +165,7 @@ def _dataset_for(dataset: DatasetName):
             prefix="physppi-protected-match-audit-"
         )
     root = Path(_PRODUCTION_WORK_ROOT.name)
-    worker_cache = (
-        root / "worker-cache" / str(os.getpid()) / f"{dataset.value}-spatial"
-    )
+    worker_cache = root / "worker-cache" / str(os.getpid()) / f"{dataset.value}-spatial"
     source = build_preflight_dataset(
         dataset,
         _production_options(root),

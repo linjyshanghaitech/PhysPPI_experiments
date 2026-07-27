@@ -186,9 +186,7 @@ def test_canonical_prior_route_emits_confidence_and_finite_loss(monkeypatch):
         assert "physppi_predicted_membrane_valid" in output
         interaction_distance = output["interaction_distance_pred"]
         assert interaction_distance.shape[-2:] == (4, 4)
-        assert torch.equal(
-            interaction_distance, interaction_distance.transpose(-1, -2)
-        )
+        assert torch.equal(interaction_distance, interaction_distance.transpose(-1, -2))
         assert torch.isfinite(torch.stack(list(breakdown.values()))).all()
         if membrane:
             assert "membrane_plane_loss" in breakdown

@@ -53,9 +53,7 @@ def test_conditioner_initial_pair_adapters_are_exact_zero():
     )
     assert torch.equal(out.s_init, s)
     assert torch.equal(out.z_init, z)
-    assert torch.equal(
-        out.contact_pair_delta, torch.zeros_like(out.contact_pair_delta)
-    )
+    assert torch.equal(out.contact_pair_delta, torch.zeros_like(out.contact_pair_delta))
     assert torch.equal(
         out.interaction_pair_delta, torch.zeros_like(out.interaction_pair_delta)
     )
@@ -107,9 +105,7 @@ def test_inactive_optional_slots_are_exact_noops():
     )
     assert torch.equal(out.s_init, s)
     assert torch.equal(out.z_init, z)
-    assert torch.equal(
-        out.contact_pair_delta, torch.zeros_like(out.contact_pair_delta)
-    )
+    assert torch.equal(out.contact_pair_delta, torch.zeros_like(out.contact_pair_delta))
     assert torch.equal(
         out.interaction_pair_delta, torch.zeros_like(out.interaction_pair_delta)
     )

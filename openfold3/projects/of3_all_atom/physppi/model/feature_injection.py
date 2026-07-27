@@ -183,8 +183,7 @@ def validate_optional_prior_features(
     legacy_keys = sorted(set(batch).intersection(LEGACY_PHYS_PPI_MODEL_INPUT_KEYS))
     if legacy_keys:
         _issue(
-            "legacy PhysPPI model input keys are forbidden: "
-            + ", ".join(legacy_keys),
+            "legacy PhysPPI model input keys are forbidden: " + ", ".join(legacy_keys),
             mode,
         )
     token_mask = token_mask if token_mask is not None else _token_mask(batch, mode)
@@ -334,8 +333,7 @@ def inject_physppi_features(
     )
     if legacy_keys:
         raise ValueError(
-            "legacy PhysPPI model input keys are forbidden: "
-            + ", ".join(legacy_keys)
+            "legacy PhysPPI model input keys are forbidden: " + ", ".join(legacy_keys)
         )
     out = dict(batch)
     for key, value in physppi_features.items():

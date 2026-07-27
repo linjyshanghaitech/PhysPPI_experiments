@@ -93,8 +93,7 @@ def main() -> None:
     fixed_test_leakage = sorted(set(fixed_test32) & cache_ids)
     if fixed_test_leakage:
         raise SystemExit(
-            "LEAKAGE_FAIL: fixed test IDs in training cache: "
-            f"{fixed_test_leakage[:20]}"
+            f"LEAKAGE_FAIL: fixed test IDs in training cache: {fixed_test_leakage[:20]}"
         )
 
     all_id_set = set(all_ids)

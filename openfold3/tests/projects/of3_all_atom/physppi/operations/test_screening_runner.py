@@ -204,7 +204,8 @@ def test_dataloader_uses_exact_production_contract(
             captured.update(kwargs)
 
     monkeypatch.setattr(
-        "openfold3.projects.of3_all_atom.physppi.screening.runner.DataLoader", CapturingLoader
+        "openfold3.projects.of3_all_atom.physppi.screening.runner.DataLoader",
+        CapturingLoader,
     )
     dataset = ScreeningDataset((), options, preflight=lambda *_: [])
 

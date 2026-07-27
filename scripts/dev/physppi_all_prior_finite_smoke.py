@@ -234,9 +234,7 @@ def _safe_create_canonical_msa_features(self, sample, atom_array):
                 deletion_matrix=main.deletion_matrix[:1].copy(),
                 metadata=pd.DataFrame(),
             )
-    main_msas, _ = structure_adapter._build_main_msas(
-        sample, chain_ids, query_msas
-    )
+    main_msas, _ = structure_adapter._build_main_msas(sample, chain_ids, query_msas)
 
     paired_by_path = {
         key: structure_adapter._read_msa_npz(path)
@@ -473,9 +471,7 @@ def _build_prior_only_batch(
             available=is_available,
             selected=is_available and mode == "all_available",
             valid=is_available,
-            provenance=(
-                f"finite_smoke:{mode}" if is_available else "unavailable"
-            ),
+            provenance=(f"finite_smoke:{mode}" if is_available else "unavailable"),
         )
         for slot, is_available in available.items()
     }

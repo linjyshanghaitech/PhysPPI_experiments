@@ -81,9 +81,7 @@ def test_missing_chain_main_msa_falls_back_to_its_query_row(monkeypatch):
     )
     monkeypatch.setattr(module, "_read_msa_npz", lambda _: query_msas["A"])
 
-    main_msas, provenance = module._build_main_msas(
-        sample, ["A", "B"], query_msas
-    )
+    main_msas, provenance = module._build_main_msas(sample, ["A", "B"], query_msas)
 
     assert provenance == {"A": "chain_file", "B": "query_only"}
     assert np.array_equal(main_msas["B"].msa, query_msas["B"].msa)

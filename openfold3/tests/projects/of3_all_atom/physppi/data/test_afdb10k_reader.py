@@ -100,9 +100,7 @@ def test_afdb_homodimer_shares_main_msa_without_fabricating_paired(
 
     sample = AFDB10kReader(root).read("AF-0000000000000001-model_v1")
 
-    assert set(sample.paths.main_msa_npzs) == {
-        "AF-0000000000000001-model_v1"
-    }
+    assert set(sample.paths.main_msa_npzs) == {"AF-0000000000000001-model_v1"}
     assert sample.paths.paired_msa_npzs == {}
     assert sample.chain_sequences["A"] == sample.chain_sequences["B"]
 

@@ -478,9 +478,7 @@ def test_preflight_config_is_private_manifest_free_and_forces_one_crop(
     dataset = build_preflight_dataset(dataset_name, options, worker_cache_dir)
 
     assert dataset.name == (
-        "qbiolip10k"
-        if dataset_name is DatasetName.QBIOLIP
-        else "afdb10k"
+        "qbiolip10k" if dataset_name is DatasetName.QBIOLIP else "afdb10k"
     )
     assert dataset.physppi.manifest is None
     assert dataset.physppi.sample_ids == []

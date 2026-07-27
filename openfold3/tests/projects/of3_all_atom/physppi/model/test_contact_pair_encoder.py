@@ -14,9 +14,7 @@ def test_physppi_package_exports_only_semantic_pair_adapters():
     assert not hasattr(package, "TokenContactEncoder")
 
 
-def _interaction_payload(
-    size: int, *edges: tuple[int, int, int]
-) -> torch.Tensor:
+def _interaction_payload(size: int, *edges: tuple[int, int, int]) -> torch.Tensor:
     payload = torch.zeros(1, size, size, 7, dtype=torch.bool)
     for left, right, channel in edges:
         payload[0, left, right, channel] = True

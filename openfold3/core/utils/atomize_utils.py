@@ -816,9 +816,7 @@ def get_token_frame_atoms(
     start_atom_index_is_valid = (start_atom_index >= 0) & (
         start_atom_index < x.shape[-2]
     )
-    safe_start_atom_index = torch.where(
-        start_atom_index_is_valid, start_atom_index, 0
-    )
+    safe_start_atom_index = torch.where(start_atom_index_is_valid, start_atom_index, 0)
     _, closest_atom_index = torch.topk(d, k=3, dim=-1, largest=False)
     a_index = torch.gather(
         closest_atom_index[..., 1], dim=-1, index=safe_start_atom_index
@@ -899,9 +897,7 @@ def get_token_frame_atoms(
     for key in frame_atoms:
         frame_index = frame_atoms[key]["index"]
         frame_index_is_valid = (
-            (frame_index >= 0)
-            & (frame_index < x.shape[-2])
-            & start_atom_index_is_valid
+            (frame_index >= 0) & (frame_index < x.shape[-2]) & start_atom_index_is_valid
         )
         if "num_atoms_per_token" in batch:
             within_token = frame_index < (
@@ -909,9 +905,7 @@ def get_token_frame_atoms(
             )
             frame_index_is_valid &= (~is_standard_token) | within_token
         frame_atoms[key]["token_atom_mask"] *= frame_index_is_valid
-        frame_atoms[key]["index"] = torch.where(
-            frame_index_is_valid, frame_index, 0
-        )
+        frame_atoms[key]["index"] = torch.where(frame_index_is_valid, frame_index, 0)
 
     # Extract coordinates
     for key in frame_atoms:

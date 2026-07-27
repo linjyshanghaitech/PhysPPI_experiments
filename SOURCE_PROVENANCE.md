@@ -16,4 +16,9 @@
 `ruff check openfold3 scripts` 在
 `openfold3/tests/core/data/tools/test_rscb.py:19` 报告一个未使用的 `pytest`
 import（F401）；相同问题已在源提交中复现，因此保留为源基线问题，没有在迁移提交
-中修改。
+中修改。源码基线提交之后另建独立提交删除该未使用 import，以确保导入的 GitHub
+Ruff workflow 的 lint 阶段可以通过；该清理不改变运行时或测试行为。
+
+同一 GitHub workflow 的 `ruff format --check` 阶段在源提交中还发现 47 个未格式化
+文件。完整源 blob 已保存在源码基线提交 `44ce89f`；其后使用同一锁定环境中的 Ruff
+对这些文件进行机械格式化，并在独立提交中保存，以使新仓库的格式检查通过。

@@ -256,7 +256,7 @@ class TrainStabilityProbe:
                         device=token_mask.device,
                     ),
                 )
-                return (out.s_init.square().mean() + out.z_init.square().mean())
+                return out.s_init.square().mean() + out.z_init.square().mean()
 
         return _Probe()
 
@@ -302,9 +302,10 @@ def validate_step_record(record: Mapping[str, Any]) -> None:
         raise RuntimeError(f"nonfinite gradients for {record.get('mode')}")
     if not bool(record.get("finite_parameters")):
         raise RuntimeError(f"nonfinite parameters for {record.get('mode')}")
-    if record.get("require_nonzero_gradients", True) and int(
-        record.get("nonzero_gradient_tensors", 0)
-    ) <= 0:
+    if (
+        record.get("require_nonzero_gradients", True)
+        and int(record.get("nonzero_gradient_tensors", 0)) <= 0
+    ):
         raise RuntimeError(f"no nonzero gradients for {record.get('mode')}")
 
 

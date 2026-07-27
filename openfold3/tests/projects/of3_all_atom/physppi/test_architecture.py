@@ -4,9 +4,7 @@ import ast
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
-PACKAGE_ROOT = (
-    REPOSITORY_ROOT / "openfold3/projects/of3_all_atom/physppi"
-)
+PACKAGE_ROOT = REPOSITORY_ROOT / "openfold3/projects/of3_all_atom/physppi"
 FORBIDDEN_IMPORT_ROOTS = (
     "openfold3.tests",
     "scripts",

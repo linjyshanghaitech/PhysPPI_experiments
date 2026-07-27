@@ -20,9 +20,7 @@ def test_data_facade_exports_runtime_readers_schema_and_adapter() -> None:
 
 def test_source_mixture_sampler_is_deterministic_and_weighted() -> None:
     import_module("openfold3.core.data.framework")
-    adapters = import_module(
-        "openfold3.projects.of3_all_atom.physppi.data.adapters"
-    )
+    adapters = import_module("openfold3.projects.of3_all_atom.physppi.data.adapters")
 
     actual = adapters.deterministic_source_mixture_indices(
         labels=["qbiolip10k"] * 5 + ["afdb10k"] * 3,

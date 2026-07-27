@@ -1,4 +1,5 @@
 """Stable public facade for PhysPPI data contracts."""
+
 from openfold3.projects.of3_all_atom.physppi.data.priors import (
     InteractionRecord,
     PriorComplexSample,

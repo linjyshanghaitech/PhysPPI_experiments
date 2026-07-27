@@ -150,8 +150,7 @@ class SurfaceTokenEncoder(nn.Module):
         )
         origin_position = encode_surface_position(origin).to(dtype=single.dtype)
         query = (
-            self.query_norm(valid_single)
-            + self.query_position(origin_position)
+            self.query_norm(valid_single) + self.query_position(origin_position)
         ).unsqueeze(1)
         attended, _ = self.attention(
             query=query,

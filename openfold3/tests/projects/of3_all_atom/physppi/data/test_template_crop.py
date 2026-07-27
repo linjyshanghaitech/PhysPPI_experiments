@@ -86,7 +86,5 @@ def test_monomer_geometry_rejects_chain_without_four_non_collinear_representativ
         ]
     )
 
-    with pytest.raises(
-        PhysPPIDataError, match="missing_mandatory_monomer_geometry"
-    ):
+    with pytest.raises(PhysPPIDataError, match="missing_mandatory_monomer_geometry"):
         module.build_monomer_input_geometry(cropped, {"A": collinear_monomer})

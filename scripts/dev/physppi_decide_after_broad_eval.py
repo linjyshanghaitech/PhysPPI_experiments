@@ -20,9 +20,7 @@ def decide_next_step(
     lora_test_mean: float,
     lora_test_median: float,
 ) -> dict[str, Any]:
-    adapter_non_inferior = (
-        adapter_test_mean >= official_test_mean - NON_INFERIOR_MARGIN
-    )
+    adapter_non_inferior = adapter_test_mean >= official_test_mean - NON_INFERIOR_MARGIN
     lora_beats_adapter = (
         lora_test_mean >= adapter_test_mean + LORA_WIN_MARGIN
         and lora_test_median >= adapter_test_median
@@ -37,9 +35,7 @@ def decide_next_step(
         decision = "WRITE_LORA_CONFIRMATION_PLAN"
         allow_training = False
         allow_lora_expansion = True
-        rationale = (
-            "LoRA won broad heldout by mean margin and did not lose median."
-        )
+        rationale = "LoRA won broad heldout by mean margin and did not lose median."
     elif adapter_non_inferior:
         decision = "TRAIN_ADAPTER_REPLICATION"
         allow_training = True
@@ -61,8 +57,7 @@ def decide_next_step(
         allow_training = False
         allow_lora_expansion = False
         rationale = (
-            "Broad result is ambiguous; reduce sampling/eval noise before "
-            "training."
+            "Broad result is ambiguous; reduce sampling/eval noise before training."
         )
     return {
         "decision": decision,
@@ -84,18 +79,10 @@ def main() -> None:
     args = parser.parse_args()
     metrics = json.loads(args.metrics_json.read_text())
     decision = decide_next_step(
-        official_test_mean=float(
-            metrics["official_predict"]["test"]["dockq_mean"]
-        ),
-        official_test_median=float(
-            metrics["official_predict"]["test"]["dockq_median"]
-        ),
-        adapter_test_mean=float(
-            metrics["adapter_seed43"]["test"]["dockq_mean"]
-        ),
-        adapter_test_median=float(
-            metrics["adapter_seed43"]["test"]["dockq_median"]
-        ),
+        official_test_mean=float(metrics["official_predict"]["test"]["dockq_mean"]),
+        official_test_median=float(metrics["official_predict"]["test"]["dockq_median"]),
+        adapter_test_mean=float(metrics["adapter_seed43"]["test"]["dockq_mean"]),
+        adapter_test_median=float(metrics["adapter_seed43"]["test"]["dockq_median"]),
         lora_test_mean=float(metrics["l1a_lora"]["test"]["dockq_mean"]),
         lora_test_median=float(metrics["l1a_lora"]["test"]["dockq_median"]),
     )

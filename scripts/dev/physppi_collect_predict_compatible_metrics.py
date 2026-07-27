@@ -85,17 +85,13 @@ def collect() -> list[dict]:
     for run_name, cfg in RUNS.items():
         path = Path(cfg["path"])
         parsed = _parse_markdown_table(path)
-        invalid_embedded = [
-            row for row in parsed if row["variant"] == "official"
-        ]
+        invalid_embedded = [row for row in parsed if row["variant"] == "official"]
         for row in parsed:
             if row["variant"] not in cfg["include_variants"]:
                 continue
             row["run"] = run_name
             row["status"] = cfg["status"]
-            row["invalid_embedded_official_rows_in_source"] = len(
-                invalid_embedded
-            )
+            row["invalid_embedded_official_rows_in_source"] = len(invalid_embedded)
             output.append(row)
         if not path.exists():
             output.append(

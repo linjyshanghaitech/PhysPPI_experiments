@@ -64,9 +64,7 @@ def _load_sibling_module(name: str) -> Any:
     return module
 
 
-def _manifest_train_ids(
-    manifest: dict[str, object], dataset: str
-) -> list[str]:
+def _manifest_train_ids(manifest: dict[str, object], dataset: str) -> list[str]:
     dataset_manifest = manifest["datasets"][dataset]
     train_ids = list(dataset_manifest["train_ids"])
     fatal_ids = list(dataset_manifest["fatal_ids"])
@@ -407,6 +405,8 @@ def reuse_subset_audit_results(
             "mode": "verified-manifest-subset",
         },
     }
+
+
 def build_training_audit(
     *,
     manifest: dict[str, object],
@@ -432,9 +432,7 @@ def build_training_audit(
             "qbiolip": audit_dataset_once(
                 "qbiolip", qbiolip_root, qbiolip_ids, qbiolip_index_cache
             ),
-            "afdb": audit_dataset_once(
-                "afdb", afdb_root, afdb_ids, afdb_index_cache
-            ),
+            "afdb": audit_dataset_once("afdb", afdb_root, afdb_ids, afdb_index_cache),
         }
         result = {
             "manifest_registration": {
@@ -452,9 +450,7 @@ def build_training_audit(
                     for dataset, report in combined.items()
                 },
             },
-            "template_atom_ids": {
-                "qbiolip": combined["qbiolip"]["template_atom_ids"]
-            },
+            "template_atom_ids": {"qbiolip": combined["qbiolip"]["template_atom_ids"]},
         }
 
     current_caches = {
@@ -509,9 +505,10 @@ def main() -> None:
         prior_manifest_bytes = args.prior_manifest.read_bytes()
         prior_manifest = json.loads(prior_manifest_bytes)
         prior_report = json.loads(args.prior_report.read_text())
-        if prior_report.get("manifest_sha256") != hashlib.sha256(
-            prior_manifest_bytes
-        ).hexdigest():
+        if (
+            prior_report.get("manifest_sha256")
+            != hashlib.sha256(prior_manifest_bytes).hexdigest()
+        ):
             raise ValueError("prior report does not match the supplied prior manifest")
     report, reused = run_audit_once(
         args.output,

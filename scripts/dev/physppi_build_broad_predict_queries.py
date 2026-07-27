@@ -12,9 +12,7 @@ DEFAULT_TRAIN_CACHE = (
     / "output/physppi_finetune_validation/phase6/full2107"
     / "training_cache_full2107.json"
 )
-DEFAULT_OUTPUT_DIR = (
-    REPO / "output/physppi_cmap_only_research/broad_eval_inputs"
-)
+DEFAULT_OUTPUT_DIR = REPO / "output/physppi_cmap_only_research/broad_eval_inputs"
 QUERY_SOURCES = [
     REPO / "output/physppi_full_msa_cache/colabfold_msas/chunks",
     REPO / "output/openfold3_official_docker_migration/comparison_inputs",
@@ -80,14 +78,10 @@ def _query_component_status(query: dict[str, Any]) -> dict[str, bool]:
     # query can still be predict-compatible when use_paired_msas is false/absent
     # or when per-chain paired paths exist and resolve.
     paired_paths = [
-        path
-        for chain in chains
-        for path in (chain.get("paired_msa_file_paths") or [])
+        path for chain in chains for path in (chain.get("paired_msa_file_paths") or [])
     ]
     has_paired_msa = (
-        all(_path_exists(str(path)) for path in paired_paths)
-        if paired_paths
-        else True
+        all(_path_exists(str(path)) for path in paired_paths) if paired_paths else True
     )
     return {
         "sequence": has_sequence,

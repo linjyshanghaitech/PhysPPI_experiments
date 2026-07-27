@@ -16,8 +16,6 @@ In CI the cassettes are replayed without network access (the default
 ``--vcr-record=none`` mode).
 """
 
-import pytest
-
 from openfold3.core.data.tools.rscb import (
     fetch_label_to_author_chain_ids,
     get_model_ranking_fit,

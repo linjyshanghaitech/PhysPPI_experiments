@@ -17,6 +17,7 @@ def vcr_config():
         "cassette_library_dir": str(_CASSETTE_DIR),
     }
 
+
 class _RCSBResponse:
     status_code = 200
 
@@ -66,10 +67,16 @@ def mock_rscb_requests(monkeypatch):
                 ],
             }
             return _RCSBResponse(
-                {"data": {"entry": {"nonpolymer_entities": [{"nonpolymer_entity_instances": [instance]}]}}}
+                {
+                    "data": {
+                        "entry": {
+                            "nonpolymer_entities": [
+                                {"nonpolymer_entity_instances": [instance]}
+                            ]
+                        }
+                    }
+                }
             )
         return _RCSBResponse({"data": {"entry": None}})
 
-    monkeypatch.setattr(
-        "openfold3.core.data.tools.rscb.requests.post", fake_post
-    )
+    monkeypatch.setattr("openfold3.core.data.tools.rscb.requests.post", fake_post)

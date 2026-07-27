@@ -5,9 +5,7 @@ import subprocess
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[6]
-DISPOSITION = (
-    REPOSITORY_ROOT / "docs/physppi/refactor/test-and-script-disposition.json"
-)
+DISPOSITION = REPOSITORY_ROOT / "docs/physppi/refactor/test-and-script-disposition.json"
 ALLOWED_ACTIONS = {"delete", "move", "retain"}
 
 
@@ -24,10 +22,7 @@ def test_disposition_is_complete_unique_and_resolved() -> None:
             cwd=REPOSITORY_ROOT,
             text=True,
         ).splitlines()
-        if (
-            path.startswith("openfold3/tests/test_physppi")
-            and path.endswith(".py")
-        )
+        if (path.startswith("openfold3/tests/test_physppi") and path.endswith(".py"))
         or path.startswith("scripts/dev/physppi")
     }
 

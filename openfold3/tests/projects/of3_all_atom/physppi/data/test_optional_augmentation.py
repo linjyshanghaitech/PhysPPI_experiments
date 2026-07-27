@@ -36,9 +36,10 @@ def test_requested_level_is_a_cumulative_prefix(requested, expected):
 
     assert selection.requested_level == requested
     assert selection.effective_level == requested
-    assert tuple(
-        slot.value for slot, state in selection.states.items() if state.active
-    ) == expected
+    assert (
+        tuple(slot.value for slot, state in selection.states.items() if state.active)
+        == expected
+    )
 
 
 def test_missing_interaction_truncates_requested_l4_to_effective_l1():

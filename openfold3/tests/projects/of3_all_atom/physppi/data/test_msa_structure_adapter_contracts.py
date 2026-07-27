@@ -157,9 +157,7 @@ def _install_structure_adapter_stubs(monkeypatch):
             "build_membrane_target": lambda *args, **kwargs: {},
             "build_surface_features": lambda *args, **kwargs: {},
             "build_tm_features": lambda *args, **kwargs: {},
-            "restrict_tm_payload_to_chains": (
-                lambda payload, *args, **kwargs: payload
-            ),
+            "restrict_tm_payload_to_chains": (lambda payload, *args, **kwargs: payload),
         },
         "openfold3.projects.of3_all_atom.physppi.model.interaction_auxiliary": {
             "_build_pair_interaction_auxiliary": lambda *args, **kwargs: {},

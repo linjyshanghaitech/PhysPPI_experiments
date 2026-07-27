@@ -71,9 +71,7 @@ def test_legacy_prior_complex_class_path_is_mapped_without_rebuild(
         paired_msa_npzs={},
         prior_pkl=Path("prior.pkl"),
     )
-    legacy_module_name = (
-        "openfold3.projects.of3_all_atom.physppi.data.prior_complex"
-    )
+    legacy_module_name = "openfold3.projects.of3_all_atom.physppi.data.prior_complex"
     legacy_module = types.ModuleType(legacy_module_name)
     legacy_module.PriorSamplePaths = PriorSamplePaths
     monkeypatch.setitem(sys.modules, legacy_module_name, legacy_module)

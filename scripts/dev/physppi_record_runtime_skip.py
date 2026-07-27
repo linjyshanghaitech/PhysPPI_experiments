@@ -77,8 +77,7 @@ def record_runtime_skip(
     )
     runtime_skips = updated.setdefault("runtime_skips", [])
     if not any(
-        entry.get("dataset") == dataset
-        and entry.get("sample_id") == sample_id
+        entry.get("dataset") == dataset and entry.get("sample_id") == sample_id
         for entry in runtime_skips
     ):
         record = {
