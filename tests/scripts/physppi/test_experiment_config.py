@@ -328,3 +328,70 @@ def test_filesystem_root_output_is_rejected(tmp_path: Path) -> None:
             environ=environ,
             validate_module=False,
         )
+
+
+def test_relative_input_paths_are_resolved_from_repo_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _, environ = _make_inputs(repo_root)
+    config = _write_minimal_config(repo_root)
+    config_dir = repo_root / "configs"
+    config_dir.mkdir()
+    experiment_path = config_dir / "experiment.toml"
+    config.rename(experiment_path)
+    local_path = config_dir / "local.toml"
+    local_path.write_text(
+        'schema_version = 1\n[slurm]\npartition = "local-partition"\n'
+    )
+    outside_repo = tmp_path / "outside"
+    outside_repo.mkdir()
+    monkeypatch.chdir(outside_repo)
+
+    loaded = load_experiment(
+        Path("configs/experiment.toml"),
+        repo_root=repo_root,
+        local_path=Path("configs/local.toml"),
+        environ=environ,
+        validate_module=False,
+    )
+
+    assert loaded.config.slurm.partition == "local-partition"
+    assert loaded.experiment_path == experiment_path
+    assert loaded.local_path == local_path
+
+
+@pytest.mark.parametrize("invalid_version", ["true", "1.0"])
+@pytest.mark.parametrize("file_kind", ["experiment", "profile", "local"])
+def test_schema_version_rejects_non_integer_one(
+    tmp_path: Path,
+    invalid_version: str,
+    file_kind: str,
+) -> None:
+    _, environ = _make_inputs(tmp_path)
+    config = _write_minimal_config(tmp_path)
+    local = tmp_path / "local.toml"
+    local.write_text("schema_version = 1\n")
+    target = {
+        "experiment": config,
+        "profile": tmp_path / "profile.toml",
+        "local": local,
+    }[file_kind]
+    target.write_text(
+        target.read_text().replace(
+            "schema_version = 1",
+            f"schema_version = {invalid_version}",
+            1,
+        )
+    )
+
+    with pytest.raises(ValidationError, match="schema_version"):
+        load_experiment(
+            config,
+            repo_root=tmp_path,
+            local_path=local,
+            environ=environ,
+            validate_module=False,
+        )

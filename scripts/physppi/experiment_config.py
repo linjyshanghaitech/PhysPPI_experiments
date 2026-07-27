@@ -8,7 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
 try:
     import tomllib
@@ -38,6 +38,15 @@ PathTuple = Annotated[tuple[PathValue, ...], BeforeValidator(_normalize_tuple)]
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
+class SchemaVersionModel(StrictModel):
+    @field_validator("schema_version", mode="before", check_fields=False)
+    @classmethod
+    def validate_schema_version(cls, value: object) -> object:
+        if type(value) is not int or value != 1:
+            raise ValueError("schema_version must be the integer 1")
+        return value
 
 
 class ExperimentSection(StrictModel):
@@ -82,7 +91,7 @@ class ValidationSection(StrictModel):
     required_directories: PathTuple = ()
 
 
-class ExperimentConfig(StrictModel):
+class ExperimentConfig(SchemaVersionModel):
     schema_version: Literal[1]
     experiment: ExperimentSection
     openfold: OpenFoldSection | None = None
@@ -92,12 +101,12 @@ class ExperimentConfig(StrictModel):
     validation: ValidationSection = Field(default_factory=ValidationSection)
 
 
-class SlurmProfileFile(StrictModel):
+class SlurmProfileFile(SchemaVersionModel):
     schema_version: Literal[1]
     slurm: SlurmResources
 
 
-class LocalOverrideFile(StrictModel):
+class LocalOverrideFile(SchemaVersionModel):
     schema_version: Literal[1]
     slurm: SlurmResources = Field(default_factory=SlurmResources)
     environment: EnvironmentSection = Field(default_factory=EnvironmentSection)
@@ -267,8 +276,10 @@ def load_experiment(
     validate_module: bool = True,
 ) -> LoadedExperiment:
     repo_root = Path(repo_root).resolve()
-    experiment_path = Path(experiment_path).resolve()
-    resolved_local_path = Path(local_path).resolve() if local_path is not None else None
+    experiment_path = _resolve_repo_path(experiment_path, repo_root)
+    resolved_local_path = (
+        _resolve_repo_path(local_path, repo_root) if local_path is not None else None
+    )
     environment = dict(os.environ if environ is None else environ)
 
     experiment_file = ExperimentConfig.model_validate(_read_toml(experiment_path))
