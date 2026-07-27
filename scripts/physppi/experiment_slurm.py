@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -10,7 +11,9 @@ import shlex
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Mapping
+import unicodedata
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
@@ -215,6 +218,36 @@ def _write_json(path: Path, value: Any) -> None:
     _write_text(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def _atomic_write_json(
+    path: Path,
+    value: Any,
+    *,
+    remove_after_replace: tuple[Path, ...] = (),
+) -> None:
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(
+                (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+        for stale_path in remove_after_replace:
+            stale_path.unlink(missing_ok=True)
+        _fsync_directory(path.parent)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def _fsync_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -262,6 +295,157 @@ def _sha256(path: Path) -> str:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _submission_secrets(prepared: PreparedRun) -> tuple[str, ...]:
+    secrets = {part for part in prepared.command if part}
+    try:
+        lines = prepared.script_path.read_text().splitlines()
+    except (OSError, UnicodeError):
+        lines = []
+    for line in lines:
+        if not line.startswith("export "):
+            continue
+        try:
+            fields = shlex.split(line)
+        except ValueError:
+            continue
+        if len(fields) != 2 or fields[0] != "export" or "=" not in fields[1]:
+            continue
+        _, value = fields[1].split("=", 1)
+        if value:
+            secrets.add(value)
+    return tuple(sorted(secrets, key=lambda value: (-len(value), value)))
+
+
+def _clean_submission_stderr(prepared: PreparedRun, stderr: str) -> str:
+    cleaned = "".join(
+        character for character in stderr if unicodedata.category(character) != "Cc"
+    )
+    secrets = tuple(
+        sorted(
+            {
+                "".join(
+                    character
+                    for character in secret
+                    if unicodedata.category(character) != "Cc"
+                )
+                for secret in _submission_secrets(prepared)
+            }
+            - {""},
+            key=lambda value: (-len(value), value),
+        )
+    )
+    cleaned = (
+        re.sub("|".join(re.escape(secret) for secret in secrets), "<redacted>", cleaned)
+        if secrets
+        else cleaned
+    )
+    return cleaned[-8192:]
+
+
+def _record_submission_error(
+    prepared: PreparedRun,
+    *,
+    error_type: str,
+    returncode: int | None,
+    stderr: str,
+) -> None:
+    _atomic_write_json(
+        prepared.run_dir / "submission-error.json",
+        {
+            "schema_version": 1,
+            "failed_at_utc": _utc_now(),
+            "error_type": error_type,
+            "returncode": returncode,
+            "stderr": _clean_submission_stderr(prepared, stderr),
+        },
+    )
+
+
+@contextmanager
+def _submission_lock(run_dir: Path) -> Iterator[None]:
+    descriptor = os.open(run_dir, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def _submit_run_locked(
+    prepared: PreparedRun,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> str:
+    submitted_path = prepared.run_dir / "submitted.json"
+    if submitted_path.exists():
+        raise RuntimeError(f"run is already submitted: {prepared.run_dir}")
+
+    try:
+        result = runner(
+            ["sbatch", "--parsable", str(prepared.script_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        _record_submission_error(
+            prepared,
+            error_type=type(exc).__name__,
+            returncode=None,
+            stderr=str(exc),
+        )
+        raise RuntimeError("Slurm submission command could not be started") from exc
+
+    if result.returncode != 0:
+        _record_submission_error(
+            prepared,
+            error_type="nonzero_exit",
+            returncode=result.returncode,
+            stderr=result.stderr or "",
+        )
+        raise RuntimeError(
+            f"Slurm submission failed with return code {result.returncode}"
+        )
+
+    match = re.fullmatch(
+        r"(?P<job_id>[0-9]+)(?:;[A-Za-z0-9_.-]+)?[ \t]*(?:\r?\n)?",
+        result.stdout or "",
+    )
+    if match is None:
+        _record_submission_error(
+            prepared,
+            error_type="invalid_job_id",
+            returncode=result.returncode,
+            stderr=result.stderr or "",
+        )
+        raise RuntimeError("Slurm submission returned an invalid job ID")
+
+    job_id = match.group("job_id")
+    if submitted_path.exists():
+        raise RuntimeError(f"run is already submitted: {prepared.run_dir}")
+    _atomic_write_json(
+        submitted_path,
+        {
+            "schema_version": 1,
+            "submitted_at_utc": _utc_now(),
+            "job_id": job_id,
+            "sbatch_sha256": _sha256(prepared.script_path),
+        },
+        remove_after_replace=(prepared.run_dir / "submission-error.json",),
+    )
+    return job_id
+
+
+def submit_run(
+    prepared: PreparedRun,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> str:
+    with _submission_lock(prepared.run_dir):
+        return _submit_run_locked(prepared, runner=runner)
 
 
 def prepare_run(
@@ -362,4 +546,5 @@ __all__ = [
     "redact_scalar_tree",
     "render_redacted_local",
     "render_sbatch",
+    "submit_run",
 ]

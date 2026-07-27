@@ -3,6 +3,9 @@ import hashlib
 import json
 import shlex
 import subprocess
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock, call
 
@@ -15,10 +18,12 @@ from scripts.physppi.experiment_config import (
     load_experiment,
 )
 from scripts.physppi.experiment_slurm import (
+    PreparedRun,
     build_command,
     git_state,
     prepare_run,
     render_sbatch,
+    submit_run,
 )
 
 try:
@@ -113,6 +118,23 @@ def _write_loaded_experiment(
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _prepared_submission(
+    root: Path,
+    *,
+    command: tuple[str, ...] = ("/usr/bin/python3", "-m", "example"),
+    script: str = "#!/bin/bash\n",
+) -> PreparedRun:
+    run_dir = root / "prepared-run"
+    run_dir.mkdir()
+    script_path = run_dir / "job.sbatch"
+    script_path.write_text(script)
+    return PreparedRun(
+        run_dir=run_dir,
+        script_path=script_path,
+        command=command,
+    )
 
 
 def test_build_command_uses_python_module_and_exact_args(tmp_path: Path) -> None:
@@ -749,3 +771,318 @@ def test_prepare_run_never_invokes_sbatch(
     )
 
     subprocess_run.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("stdout", "expected_job_id"),
+    [
+        ("12345", "12345"),
+        ("12345;cluster\n", "12345"),
+    ],
+)
+def test_submit_run_records_only_valid_job_id(
+    tmp_path: Path,
+    stdout: str,
+    expected_job_id: str,
+) -> None:
+    prepared = _prepared_submission(tmp_path)
+    runner = Mock(
+        return_value=subprocess.CompletedProcess(
+            args=["sbatch"],
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        )
+    )
+
+    job_id = submit_run(prepared, runner=runner)
+
+    assert job_id == expected_job_id
+    runner.assert_called_once_with(
+        ["sbatch", "--parsable", str(prepared.script_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    submitted = json.loads((prepared.run_dir / "submitted.json").read_text())
+    assert submitted == {
+        "schema_version": 1,
+        "submitted_at_utc": submitted["submitted_at_utc"],
+        "job_id": expected_job_id,
+        "sbatch_sha256": _sha256(prepared.script_path),
+    }
+    assert submitted["submitted_at_utc"].endswith("Z")
+    assert not (prepared.run_dir / "submission-error.json").exists()
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "",
+        "not-a-job",
+        "123 bad",
+        "12345;cluster extra",
+        "12345;cluster\nextra",
+        "12345;cluster\0",
+        "12345;cluster\x7f",
+    ],
+)
+def test_submit_run_rejects_invalid_job_id(
+    tmp_path: Path,
+    stdout: str,
+) -> None:
+    prepared = _prepared_submission(tmp_path)
+    runner = Mock(
+        return_value=subprocess.CompletedProcess(
+            args=["sbatch"],
+            returncode=0,
+            stdout=stdout,
+            stderr="invalid response",
+        )
+    )
+
+    with pytest.raises(RuntimeError):
+        submit_run(prepared, runner=runner)
+
+    assert not (prepared.run_dir / "submitted.json").exists()
+    error = json.loads((prepared.run_dir / "submission-error.json").read_text())
+    assert error["schema_version"] == 1
+    assert error["failed_at_utc"].endswith("Z")
+    assert error["error_type"] == "invalid_job_id"
+    assert error["returncode"] == 0
+    assert error["stderr"] == "invalid response"
+
+
+def test_submit_run_records_nonzero_exit_without_submitted_state(
+    tmp_path: Path,
+) -> None:
+    prepared = _prepared_submission(tmp_path)
+    runner = Mock(
+        return_value=subprocess.CompletedProcess(
+            args=["sbatch"],
+            returncode=2,
+            stdout="12345\n",
+            stderr="scheduler rejected request",
+        )
+    )
+
+    with pytest.raises(RuntimeError):
+        submit_run(prepared, runner=runner)
+
+    assert not (prepared.run_dir / "submitted.json").exists()
+    error = json.loads((prepared.run_dir / "submission-error.json").read_text())
+    assert error["error_type"] == "nonzero_exit"
+    assert error["returncode"] == 2
+    assert error["stderr"] == "scheduler rejected request"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        FileNotFoundError("sbatch is missing"),
+        PermissionError("sbatch is not executable"),
+    ],
+)
+def test_submit_run_records_runner_os_error_without_submitted_state(
+    tmp_path: Path,
+    failure: OSError,
+) -> None:
+    prepared = _prepared_submission(tmp_path)
+    runner = Mock(side_effect=failure)
+
+    with pytest.raises(RuntimeError):
+        submit_run(prepared, runner=runner)
+
+    assert not (prepared.run_dir / "submitted.json").exists()
+    error = json.loads((prepared.run_dir / "submission-error.json").read_text())
+    assert error["error_type"] == type(failure).__name__
+    assert error["returncode"] is None
+    assert error["stderr"] == str(failure)
+
+
+def test_submit_run_redacts_command_and_export_secrets_and_cleans_stderr(
+    tmp_path: Path,
+) -> None:
+    command_secret = "command-secret-value"
+    export_secret = "export-secret-value"
+    prepared = _prepared_submission(
+        tmp_path,
+        command=("/usr/bin/python3", "--token", command_secret),
+        script=(
+            "#!/bin/bash\n"
+            f"export API_TOKEN={shlex.quote(export_secret)}\n"
+            "exec /usr/bin/python3\n"
+        ),
+    )
+    stderr = (
+        "x" * 9000
+        + "\0before\x01"
+        + command_secret
+        + "\n"
+        + export_secret
+        + "\x7fafter"
+    )
+    runner = Mock(
+        return_value=subprocess.CompletedProcess(
+            args=["sbatch"],
+            returncode=1,
+            stdout="",
+            stderr=stderr,
+        )
+    )
+
+    with pytest.raises(RuntimeError):
+        submit_run(prepared, runner=runner)
+
+    serialized = (prepared.run_dir / "submission-error.json").read_text()
+    error = json.loads(serialized)
+    assert command_secret not in serialized
+    assert export_secret not in serialized
+    assert "\0" not in error["stderr"]
+    assert "\x01" not in error["stderr"]
+    assert "\x7f" not in error["stderr"]
+    assert len(error["stderr"]) == 8192
+    assert error["stderr"].endswith("before<redacted><redacted>after")
+
+
+def test_submit_run_redaction_does_not_rewrite_its_placeholder(
+    tmp_path: Path,
+) -> None:
+    prepared = _prepared_submission(
+        tmp_path,
+        command=("redacted",),
+        script="#!/bin/bash\nexport TOKEN=prefix-redacted\n",
+    )
+    runner = Mock(
+        return_value=subprocess.CompletedProcess(
+            args=["sbatch"],
+            returncode=1,
+            stdout="",
+            stderr="prefix-redacted redacted",
+        )
+    )
+
+    with pytest.raises(RuntimeError):
+        submit_run(prepared, runner=runner)
+
+    error = json.loads((prepared.run_dir / "submission-error.json").read_text())
+    assert error["stderr"] == "<redacted> <redacted>"
+
+
+def test_submit_run_removes_controls_before_redacting_secrets(
+    tmp_path: Path,
+) -> None:
+    prepared = _prepared_submission(
+        tmp_path,
+        command=("command-secret",),
+    )
+    runner = Mock(
+        return_value=subprocess.CompletedProcess(
+            args=["sbatch"],
+            returncode=1,
+            stdout="",
+            stderr="failure: command-\0secret",
+        )
+    )
+
+    with pytest.raises(RuntimeError):
+        submit_run(prepared, runner=runner)
+
+    serialized = (prepared.run_dir / "submission-error.json").read_text()
+    assert "command-secret" not in serialized
+    assert json.loads(serialized)["stderr"] == "failure: <redacted>"
+
+
+def test_submit_run_fails_before_runner_when_already_submitted(
+    tmp_path: Path,
+) -> None:
+    prepared = _prepared_submission(tmp_path)
+    submitted_path = prepared.run_dir / "submitted.json"
+    original = '{"job_id": "111"}\n'
+    submitted_path.write_text(original)
+    runner = Mock(side_effect=AssertionError("runner must not be called"))
+
+    with pytest.raises(RuntimeError, match="already submitted"):
+        submit_run(prepared, runner=runner)
+
+    runner.assert_not_called()
+    assert submitted_path.read_text() == original
+
+
+def test_submit_run_serializes_concurrent_submission_attempts(
+    tmp_path: Path,
+) -> None:
+    prepared = _prepared_submission(tmp_path)
+    start = threading.Barrier(2)
+    runner_calls = 0
+    calls_lock = threading.Lock()
+
+    def runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal runner_calls
+        with calls_lock:
+            runner_calls += 1
+        time.sleep(0.05)
+        return subprocess.CompletedProcess(
+            args=["sbatch"],
+            returncode=0,
+            stdout="12345\n",
+            stderr="",
+        )
+
+    def attempt() -> str:
+        start.wait()
+        try:
+            return submit_run(prepared, runner=runner)
+        except RuntimeError as exc:
+            return str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: attempt(), range(2)))
+
+    assert runner_calls == 1
+    assert results.count("12345") == 1
+    assert sum("already submitted" in result for result in results) == 1
+    assert (
+        json.loads((prepared.run_dir / "submitted.json").read_text())["job_id"]
+        == "12345"
+    )
+
+
+def test_submit_run_atomically_replaces_status_and_fsyncs_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = _prepared_submission(tmp_path)
+    error_path = prepared.run_dir / "submission-error.json"
+    error_path.write_text('{"stale": true}\n')
+    replacements: list[tuple[Path, Path]] = []
+    fsyncs: list[Path] = []
+    real_replace = experiment_slurm.os.replace
+
+    def record_replace(source: Path, destination: Path) -> None:
+        replacements.append((Path(source), Path(destination)))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(experiment_slurm.os, "replace", record_replace)
+    monkeypatch.setattr(
+        experiment_slurm,
+        "_fsync_directory",
+        lambda path: fsyncs.append(path),
+    )
+    runner = Mock(
+        return_value=subprocess.CompletedProcess(
+            args=["sbatch"],
+            returncode=0,
+            stdout="54321\n",
+            stderr="",
+        )
+    )
+
+    assert submit_run(prepared, runner=runner) == "54321"
+
+    assert len(replacements) == 1
+    temporary, destination = replacements[0]
+    assert temporary.parent == prepared.run_dir
+    assert destination == prepared.run_dir / "submitted.json"
+    assert fsyncs == [prepared.run_dir]
+    assert not error_path.exists()
