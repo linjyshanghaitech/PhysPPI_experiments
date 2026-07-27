@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -395,3 +396,129 @@ def test_schema_version_rejects_non_integer_one(
             environ=environ,
             validate_module=False,
         )
+
+
+def test_job_name_rejects_newline(tmp_path: Path) -> None:
+    _, environ = _make_inputs(tmp_path)
+    config = _write_minimal_config(tmp_path)
+    config.write_text(
+        config.read_text().replace(
+            'job_name = "align-audit"',
+            'job_name = "align\\naudit"',
+        )
+    )
+
+    with pytest.raises(ValueError, match="control character"):
+        load_experiment(
+            config,
+            repo_root=tmp_path,
+            environ=environ,
+            validate_module=False,
+        )
+
+
+def test_environment_export_rejects_invalid_identifier(tmp_path: Path) -> None:
+    _, environ = _make_inputs(tmp_path)
+    config = _write_minimal_config(tmp_path)
+    config.write_text(
+        config.read_text() + '\n[environment.export]\n"INVALID-NAME" = "unsafe"\n'
+    )
+
+    with pytest.raises(ValidationError, match="INVALID-NAME"):
+        load_experiment(
+            config,
+            repo_root=tmp_path,
+            environ=environ,
+            validate_module=False,
+        )
+
+
+def test_environment_required_rejects_invalid_identifier(tmp_path: Path) -> None:
+    _, environ = _make_inputs(tmp_path)
+    config = _write_minimal_config(tmp_path)
+    config.write_text(
+        config.read_text().replace(
+            'required = ["DATA_ROOT", "OUTPUT_ROOT"]',
+            'required = ["INVALID-NAME"]',
+        )
+    )
+
+    with pytest.raises(ValidationError, match="INVALID-NAME"):
+        load_experiment(
+            config,
+            repo_root=tmp_path,
+            environ=environ,
+            validate_module=False,
+        )
+
+
+def test_expanded_environment_value_rejects_newline(tmp_path: Path) -> None:
+    data, environ = _make_inputs(tmp_path)
+    config = _write_minimal_config(tmp_path)
+    environ["DATA_ROOT"] = f"{data}\nINJECTED=value"
+
+    with pytest.raises(ValueError, match="control character"):
+        load_experiment(
+            config,
+            repo_root=tmp_path,
+            environ=environ,
+            validate_module=False,
+        )
+
+
+def test_module_preflight_does_not_execute_parent_package(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, environ = _make_inputs(tmp_path)
+    config = _write_minimal_config(tmp_path)
+    config.write_text(
+        config.read_text().replace(
+            'module = "tests.fixtures.fake_experiment"',
+            'module = "preflight_package.experiment"',
+        )
+    )
+    sentinel = tmp_path / "parent-imported"
+    package = tmp_path / "preflight_package"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('imported')\n"
+    )
+    (package / "experiment.py").write_text("VALUE = 1\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    load_experiment(
+        config,
+        repo_root=tmp_path,
+        environ=environ,
+    )
+
+    assert not sentinel.exists()
+
+
+@pytest.mark.parametrize("file_kind", ["experiment", "profile", "local"])
+def test_malformed_toml_reports_source_path(
+    tmp_path: Path,
+    file_kind: str,
+) -> None:
+    _, environ = _make_inputs(tmp_path)
+    config = _write_minimal_config(tmp_path)
+    local = tmp_path / "local.toml"
+    local.write_text("schema_version = 1\n")
+    target = {
+        "experiment": config,
+        "profile": tmp_path / "profile.toml",
+        "local": local,
+    }[file_kind]
+    target.write_text("schema_version = [\n")
+
+    with pytest.raises(ValueError, match=re.escape(str(target))) as exc_info:
+        load_experiment(
+            config,
+            repo_root=tmp_path,
+            local_path=local,
+            environ=environ,
+            validate_module=False,
+        )
+
+    assert exc_info.value.__cause__ is not None

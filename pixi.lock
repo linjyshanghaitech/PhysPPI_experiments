@@ -20075,6 +20075,7 @@ packages:
   - tqdm
   - typing-extensions
   - lmdb
+  - tomli>=2 ; python_full_version < '3.11'
   - pytest ; extra == 'dev'
   - pytest-xdist ; extra == 'dev'
   - pytest-cov ; extra == 'dev'

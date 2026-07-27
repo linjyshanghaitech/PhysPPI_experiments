@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import importlib.util
+import importlib.machinery
 import os
 import re
 from collections.abc import Mapping
@@ -8,7 +8,14 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+)
 
 try:
     import tomllib
@@ -17,6 +24,8 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
 
 
 _ENVIRONMENT_PLACEHOLDER = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
+_ENVIRONMENT_IDENTIFIER = r"^[A-Za-z_][A-Za-z0-9_]*$"
+_PROHIBITED_CONTROL_CHARACTERS = frozenset("\r\n\0")
 
 
 def _normalize_path(value: object) -> object:
@@ -34,6 +43,14 @@ def _normalize_tuple(value: object) -> object:
 PathValue = Annotated[Path, BeforeValidator(_normalize_path)]
 StringTuple = Annotated[tuple[str, ...], BeforeValidator(_normalize_tuple)]
 PathTuple = Annotated[tuple[PathValue, ...], BeforeValidator(_normalize_tuple)]
+EnvironmentName = Annotated[
+    str,
+    StringConstraints(pattern=_ENVIRONMENT_IDENTIFIER),
+]
+EnvironmentTuple = Annotated[
+    tuple[EnvironmentName, ...],
+    BeforeValidator(_normalize_tuple),
+]
 
 
 class StrictModel(BaseModel):
@@ -82,8 +99,8 @@ class ArtifactsSection(StrictModel):
 
 
 class EnvironmentSection(StrictModel):
-    required: StringTuple = ()
-    export: dict[str, str] = Field(default_factory=dict)
+    required: EnvironmentTuple = ()
+    export: dict[EnvironmentName, str] = Field(default_factory=dict)
 
 
 class ValidationSection(StrictModel):
@@ -119,9 +136,12 @@ class LoadedExperiment(NamedTuple):
     local_path: Path | None
 
 
-def _read_toml(path: Path) -> dict[str, Any]:
-    with path.open("rb") as handle:
-        return tomllib.load(handle)
+def _load_toml(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("rb") as handle:
+            return tomllib.load(handle)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"invalid TOML in {path}: {exc}") from exc
 
 
 def _same_value_kind(left: object, right: object) -> bool:
@@ -177,7 +197,10 @@ def _expand_string(value: str, environ: Mapping[str, str]) -> str:
             raise ValueError(f"environment variable {name!r} is not defined")
         return environ[name]
 
-    return _ENVIRONMENT_PLACEHOLDER.sub(replace, value)
+    expanded = _ENVIRONMENT_PLACEHOLDER.sub(replace, value)
+    if any(character in expanded for character in _PROHIBITED_CONTROL_CHARACTERS):
+        raise ValueError("configuration string contains a prohibited control character")
+    return expanded
 
 
 def _expand_environment(value: Any, environ: Mapping[str, str]) -> Any:
@@ -237,6 +260,31 @@ def _validate_required_environment(
             raise ValueError(f"required environment variable {name!r} is not defined")
 
 
+def _find_module_spec(
+    module_name: str,
+) -> importlib.machinery.ModuleSpec | None:
+    components = module_name.split(".")
+    search_locations = None
+    full_name = ""
+    for index, component in enumerate(components):
+        if not component:
+            return None
+        full_name = f"{full_name}.{component}" if full_name else component
+        module_spec = importlib.machinery.PathFinder.find_spec(
+            full_name,
+            search_locations,
+        )
+        if module_spec is None:
+            return None
+        if (
+            index < len(components) - 1
+            and module_spec.submodule_search_locations is None
+        ):
+            return None
+        search_locations = module_spec.submodule_search_locations
+    return module_spec
+
+
 def _preflight(config: ExperimentConfig, *, validate_module: bool) -> None:
     output_dir = config.artifacts.output_dir
     if output_dir == Path("/"):
@@ -258,7 +306,7 @@ def _preflight(config: ExperimentConfig, *, validate_module: bool) -> None:
 
     if validate_module:
         try:
-            module_spec = importlib.util.find_spec(config.experiment.module)
+            module_spec = _find_module_spec(config.experiment.module)
         except (AttributeError, ImportError, ModuleNotFoundError, ValueError):
             module_spec = None
         if module_spec is None:
@@ -282,13 +330,13 @@ def load_experiment(
     )
     environment = dict(os.environ if environ is None else environ)
 
-    experiment_file = ExperimentConfig.model_validate(_read_toml(experiment_path))
+    experiment_file = ExperimentConfig.model_validate(_load_toml(experiment_path))
     expanded_profile = _expand_string(
         str(experiment_file.slurm.profile),
         environment,
     )
     profile_path = _resolve_repo_path(expanded_profile, repo_root)
-    profile_file = SlurmProfileFile.model_validate(_read_toml(profile_path))
+    profile_file = SlurmProfileFile.model_validate(_load_toml(profile_path))
 
     merged = _merge_mappings(
         _without_schema_version(profile_file),
@@ -297,7 +345,7 @@ def load_experiment(
     merged["schema_version"] = experiment_file.schema_version
 
     if resolved_local_path is not None:
-        local_file = LocalOverrideFile.model_validate(_read_toml(resolved_local_path))
+        local_file = LocalOverrideFile.model_validate(_load_toml(resolved_local_path))
         merged = _merge_mappings(
             merged,
             _without_schema_version(local_file),
