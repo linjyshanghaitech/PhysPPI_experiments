@@ -21,6 +21,7 @@ ensure_repository_root()
 
 import argparse
 import json
+import os
 from hashlib import sha256
 from pathlib import Path
 
@@ -45,7 +46,12 @@ from openfold3.projects.of3_all_atom.physppi.model.feature_injection import (
 )
 
 _SNAPSHOT_DATASET_ROOTS = {
-    "qbiolip": Path("/101045/jinyu/PPI/Prior_out/training/Q-BioLiP-10k-new"),
+    "qbiolip": Path(
+        os.environ.get(
+            "PHYSPPI_QBIOLIP_ROOT",
+            Path.home() / "PPI/Prior_out/training/Q-BioLiP-10k-new",
+        )
+    ),
 }
 _FORBIDDEN_MODEL_INPUT_KEYS = (
     ESM_FORBIDDEN_KEYS

@@ -19,14 +19,19 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-CANONICAL_CHECKPOINT = "/101045/jinyu/.openfold3/of3-p2-155k.pt"
-COMPONENTS_CIF = (
-    "/101045/jinyu/PhysPPI/openfold-3/output/physppi_msa_cache/components.cif"
+CANONICAL_CHECKPOINT = os.environ.get(
+    "OPENFOLD3_CHECKPOINT",
+    str(Path.home() / ".openfold3/of3-p2-155k.pt"),
+)
+COMPONENTS_CIF = os.environ.get(
+    "PHYSPPI_COMPONENTS_CIF",
+    str(Path.home() / "PhysPPI/openfold-3/output/physppi_msa_cache/components.cif"),
 )
 TRAINING_SCOPE = "physppi_lora_assessment"
 LORA_GROUPS = [

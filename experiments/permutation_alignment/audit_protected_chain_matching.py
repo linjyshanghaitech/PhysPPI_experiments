@@ -9,6 +9,8 @@ import math
 import os
 import tempfile
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -38,20 +40,49 @@ from openfold3.projects.of3_all_atom.physppi.screening.models import (
 from openfold3.projects.of3_all_atom.physppi.screening.preflight import _seed
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-_QBIOLIP_ROOT = Path("/101045/jinyu/PPI/Prior_out/training/Q-BioLiP-10k-new")
-_AFDB_ROOT = Path("/101045/jinyu/PPI/Prior_out/training/AFDB-10k-1")
-_FORMAL_ROOT = Path("/101045/jinyu/PhysPPI/runs/physppi_formal_8gpu")
-_INDEX_CACHE_ROOT = _FORMAL_ROOT / "reader-index-cache"
-_MANIFEST_ROOT = _FORMAL_ROOT / "manifests"
-_COMPONENTS_CIF = Path(
-    "/101045/jinyu/PhysPPI/openfold-3/output/physppi_msa_cache/components.cif"
-)
-_REFERENCE_MOLECULES = (
+_DEFAULT_REFERENCE_MOLECULES = (
     _REPOSITORY_ROOT
     / "openfold3/core/data/resources/canonical_protein_data/reference_mols"
 )
-_PRODUCTION_WORK_ROOT: tempfile.TemporaryDirectory[str] | None = None
-_PRODUCTION_DATASETS: dict[DatasetName, object] = {}
+
+
+@dataclass(frozen=True)
+class ProductionPaths:
+    """Explicit production inputs for the read-only matcher audit."""
+
+    qbiolip_root: Path
+    afdb_root: Path
+    formal_root: Path
+    components_cif: Path
+    reference_molecules: Path
+
+    def screening_options(self, output_root: Path) -> ScreeningOptions:
+        manifests = self.formal_root / "manifests"
+        return ScreeningOptions(
+            qbiolip_root=self.qbiolip_root,
+            afdb_root=self.afdb_root,
+            qbiolip_index_cache=(
+                self.formal_root / "reader-index-cache/qbiolip10k-v1.pkl"
+            ),
+            afdb_index_cache=(self.formal_root / "reader-index-cache/afdb10k-v1.pkl"),
+            qbiolip_canonical_report=manifests / "qbiolip-audit.json",
+            afdb_canonical_report=manifests / "afdb-audit.json",
+            history_runs_root=self.formal_root,
+            manifests_dir=manifests,
+            runtime_ledger=manifests / "runtime-failure-ledger.jsonl",
+            prior_audit=(
+                self.formal_root
+                / "audits/v1-v32-full-20k-data-errors/data-error-ids.json"
+            ),
+            components_cif=self.components_cif,
+            reference_molecule_directory=self.reference_molecules,
+            output_root=output_root,
+            workers=1,
+        )
+
+
+_PRODUCTION_WORK_ROOTS: dict[ProductionPaths, tempfile.TemporaryDirectory[str]] = {}
+_PRODUCTION_DATASETS: dict[tuple[ProductionPaths, DatasetName], object] = {}
 
 
 class ProtectedMatchAuditRecord(BaseModel):
@@ -135,52 +166,39 @@ def _diagnostics(value: Mapping[str, Any] | object) -> dict[str, object]:
     }
 
 
-def _production_options(output_root: Path) -> ScreeningOptions:
-    return ScreeningOptions(
-        qbiolip_root=_QBIOLIP_ROOT,
-        afdb_root=_AFDB_ROOT,
-        qbiolip_index_cache=_INDEX_CACHE_ROOT / "qbiolip10k-v1.pkl",
-        afdb_index_cache=_INDEX_CACHE_ROOT / "afdb10k-v1.pkl",
-        qbiolip_canonical_report=_MANIFEST_ROOT / "qbiolip-audit.json",
-        afdb_canonical_report=_MANIFEST_ROOT / "afdb-audit.json",
-        history_runs_root=_FORMAL_ROOT,
-        manifests_dir=_MANIFEST_ROOT,
-        runtime_ledger=_MANIFEST_ROOT / "runtime-failure-ledger.jsonl",
-        prior_audit=(
-            _FORMAL_ROOT / "audits/v1-v32-full-20k-data-errors/data-error-ids.json"
-        ),
-        components_cif=_COMPONENTS_CIF,
-        reference_molecule_directory=_REFERENCE_MOLECULES,
-        output_root=output_root,
-        workers=1,
-    )
+def _production_options(
+    paths: ProductionPaths,
+    output_root: Path,
+) -> ScreeningOptions:
+    return paths.screening_options(output_root)
 
 
-def _dataset_for(dataset: DatasetName):
-    global _PRODUCTION_WORK_ROOT
-    if dataset in _PRODUCTION_DATASETS:
-        return _PRODUCTION_DATASETS[dataset]
-    if _PRODUCTION_WORK_ROOT is None:
-        _PRODUCTION_WORK_ROOT = tempfile.TemporaryDirectory(
+def _dataset_for(paths: ProductionPaths, dataset: DatasetName):
+    key = (paths, dataset)
+    if key in _PRODUCTION_DATASETS:
+        return _PRODUCTION_DATASETS[key]
+    if paths not in _PRODUCTION_WORK_ROOTS:
+        _PRODUCTION_WORK_ROOTS[paths] = tempfile.TemporaryDirectory(
             prefix="physppi-protected-match-audit-"
         )
-    root = Path(_PRODUCTION_WORK_ROOT.name)
+    root = Path(_PRODUCTION_WORK_ROOTS[paths].name)
     worker_cache = root / "worker-cache" / str(os.getpid()) / f"{dataset.value}-spatial"
     source = build_preflight_dataset(
         dataset,
-        _production_options(root),
+        _production_options(paths, root),
         worker_cache,
     )
-    _PRODUCTION_DATASETS[dataset] = source
+    _PRODUCTION_DATASETS[key] = source
     return source
 
 
 def _build_production_match_inputs(
+    paths: ProductionPaths,
     dataset: DatasetName,
     sample_id: str,
 ) -> tuple[dict, dict, torch.Tensor, torch.Tensor]:
     """Build the canonical route once, before optional-prior materialization."""
-    source = _dataset_for(dataset)
+    source = _dataset_for(paths, dataset)
     _seed(dataset, sample_id, "spatial")
     rows = source.datapoint_cache.index[
         source.datapoint_cache["pdb_id"] == sample_id
@@ -260,12 +278,13 @@ def _run_matcher_with_identity_fallback(
 
 
 def production_match_evaluator(
+    paths: ProductionPaths,
     dataset: DatasetName,
     sample_id: str,
 ) -> Mapping[str, Any]:
     """Evaluate one exact ID through canonical features and production matching."""
     pred_features, gt_features, atom_positions, atom_mask = (
-        _build_production_match_inputs(dataset, sample_id)
+        _build_production_match_inputs(paths, dataset, sample_id)
     )
     return _run_matcher_with_identity_fallback(
         pred_features=pred_features,
@@ -352,16 +371,51 @@ def build_parser() -> argparse.ArgumentParser:
             "read-only PhysPPI feature/matcher adapter."
         ),
     )
+    parser.add_argument("--qbiolip-root", type=Path)
+    parser.add_argument("--afdb-root", type=Path)
+    parser.add_argument("--formal-root", type=Path)
+    parser.add_argument("--components-cif", type=Path)
+    parser.add_argument(
+        "--reference-molecules",
+        type=Path,
+        default=_DEFAULT_REFERENCE_MOLECULES,
+    )
     return parser
 
 
-def main() -> None:
-    args = build_parser().parse_args()
-    evaluator = (
-        production_match_evaluator
-        if args.evaluator is None
-        else _load_evaluator(args.evaluator)
+def _production_paths_from_args(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> ProductionPaths | None:
+    if args.evaluator is not None:
+        return None
+    required = (
+        ("qbiolip_root", "--qbiolip-root"),
+        ("afdb_root", "--afdb-root"),
+        ("formal_root", "--formal-root"),
+        ("components_cif", "--components-cif"),
     )
+    for attribute, option in required:
+        if getattr(args, attribute) is None:
+            parser.error(f"{option} is required when --evaluator is not set")
+    return ProductionPaths(
+        qbiolip_root=args.qbiolip_root,
+        afdb_root=args.afdb_root,
+        formal_root=args.formal_root,
+        components_cif=args.components_cif,
+        reference_molecules=args.reference_molecules,
+    )
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    paths = _production_paths_from_args(parser, args)
+    evaluator: MatchEvaluator
+    if paths is None:
+        evaluator = _load_evaluator(args.evaluator)
+    else:
+        evaluator = partial(production_match_evaluator, paths)
     run_protected_match_audit(
         args.runtime_ledger,
         args.output,
