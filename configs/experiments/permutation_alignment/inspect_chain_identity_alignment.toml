@@ -1,0 +1,49 @@
+schema_version = 1
+
+[experiment]
+name = "permutation-alignment"
+run_name = "inspect-chain-identity-alignment-v1"
+module = "experiments.permutation_alignment.inspect_chain_identity_alignment"
+args = [
+  "--dataset", "${PHYSPPI_DEBUG_DATASET}",
+  "--sample-id", "${PHYSPPI_DEBUG_SAMPLE_ID}",
+  "--qbiolip-root", "${PHYSPPI_QBIOLIP_ROOT}",
+  "--afdb-root", "${PHYSPPI_AFDB_ROOT}",
+  "--formal-root", "${PHYSPPI_FORMAL_ROOT}",
+  "--components-cif", "${PHYSPPI_COMPONENTS_CIF}",
+  "--max-token-rows", "32",
+  "--output", "${PHYSPPI_OUTPUT_ROOT}/experiments/permutation_alignment/inspect-chain-identity-alignment-v1/inspection.json",
+]
+
+[slurm]
+profile = "configs/slurm/cpu_debug.toml"
+job_name = "ppi-chain-id-debug"
+
+[artifacts]
+output_dir = "${PHYSPPI_OUTPUT_ROOT}/experiments/permutation_alignment/inspect-chain-identity-alignment-v1"
+
+[environment]
+required = [
+  "PHYSPPI_DEBUG_DATASET",
+  "PHYSPPI_DEBUG_SAMPLE_ID",
+  "PHYSPPI_QBIOLIP_ROOT",
+  "PHYSPPI_AFDB_ROOT",
+  "PHYSPPI_FORMAL_ROOT",
+  "PHYSPPI_COMPONENTS_CIF",
+  "PHYSPPI_OUTPUT_ROOT",
+]
+
+[validation]
+required_files = [
+  "${PHYSPPI_COMPONENTS_CIF}",
+  "${PHYSPPI_FORMAL_ROOT}/reader-index-cache/qbiolip10k-v1.pkl",
+  "${PHYSPPI_FORMAL_ROOT}/reader-index-cache/afdb10k-v1.pkl",
+  "${PHYSPPI_FORMAL_ROOT}/manifests/qbiolip-audit.json",
+  "${PHYSPPI_FORMAL_ROOT}/manifests/afdb-audit.json",
+  "${PHYSPPI_FORMAL_ROOT}/audits/v1-v32-full-20k-data-errors/data-error-ids.json",
+]
+required_directories = [
+  "${PHYSPPI_QBIOLIP_ROOT}",
+  "${PHYSPPI_AFDB_ROOT}",
+  "${PHYSPPI_FORMAL_ROOT}",
+]

@@ -28,7 +28,6 @@ from openfold3.core.utils.atomize_utils import (
     broadcast_token_feat_to_atoms,
     get_token_atom_index_offset,
     get_token_center_atom_indices,
-    get_token_center_atoms,
 )
 from openfold3.core.utils.geometry.kabsch_alignment import (
     Transformation,
@@ -1015,6 +1014,202 @@ def get_pred_to_permuted_gt_transformation(
     return transformation
 
 
+def get_token_identity_gt_token_subset_index(
+    *,
+    gt_token_index: torch.Tensor,
+    pred_token_index: torch.Tensor,
+    gt_asym_id: torch.Tensor | None = None,
+    pred_asym_id: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Map prediction tokens to GT tokens by the stable source token index."""
+    gt_tokens = [int(value) for value in gt_token_index.detach().cpu().tolist()]
+    pred_tokens = [int(value) for value in pred_token_index.detach().cpu().tolist()]
+    duplicate_gt_tokens = [
+        token for token, count in Counter(gt_tokens).items() if count > 1
+    ]
+    if duplicate_gt_tokens:
+        raise ProtectedChainMatchError("token_identity_duplicate_gt_token_index")
+
+    duplicate_pred_tokens = [
+        token for token, count in Counter(pred_tokens).items() if count > 1
+    ]
+    if duplicate_pred_tokens:
+        raise ProtectedChainMatchError("token_identity_duplicate_pred_token_index")
+
+    gt_token_to_row = {token: row for row, token in enumerate(gt_tokens)}
+    missing_tokens = [token for token in pred_tokens if token not in gt_token_to_row]
+    if missing_tokens:
+        raise ProtectedChainMatchError("token_identity_missing_gt_token_index")
+
+    gt_token_subset_index = torch.tensor(
+        [gt_token_to_row[token] for token in pred_tokens],
+        dtype=torch.long,
+        device=gt_token_index.device,
+    )
+    if gt_asym_id is not None and pred_asym_id is not None:
+        matched_gt_asym = gt_asym_id[gt_token_subset_index].detach().cpu()
+        pred_asym = pred_asym_id.detach().cpu()
+        if not torch.equal(matched_gt_asym, pred_asym):
+            raise ProtectedChainMatchError("token_identity_asym_id_mismatch")
+
+    return gt_token_subset_index
+
+
+def _token_atom_start_index(num_atoms_per_token: torch.Tensor) -> torch.Tensor:
+    num_atoms_per_token = num_atoms_per_token.long()
+    if num_atoms_per_token.numel() == 0:
+        return torch.empty_like(num_atoms_per_token)
+    return torch.cat(
+        [
+            torch.zeros(1, dtype=torch.long, device=num_atoms_per_token.device),
+            torch.cumsum(num_atoms_per_token[:-1], dim=0),
+        ]
+    )
+
+
+def _token_identity_atom_index_before_symmetry(
+    *,
+    gt_positions: torch.Tensor,
+    gt_token_subset_index: torch.Tensor,
+    gt_num_atoms_per_token: torch.Tensor,
+    pred_positions_aligned: torch.Tensor,
+    pred_num_atoms_per_token: torch.Tensor,
+) -> torch.Tensor:
+    gt_num_atoms_per_token = gt_num_atoms_per_token.long()
+    pred_num_atoms_per_token = pred_num_atoms_per_token.long()
+    if int(gt_num_atoms_per_token.sum().item()) != gt_positions.shape[0]:
+        raise ProtectedChainMatchError("token_identity_gt_atom_count_mismatch")
+    if int(pred_num_atoms_per_token.sum().item()) != pred_positions_aligned.shape[0]:
+        raise ProtectedChainMatchError("token_identity_pred_atom_count_mismatch")
+
+    matched_gt_num_atoms = gt_num_atoms_per_token[gt_token_subset_index]
+    if not torch.equal(
+        matched_gt_num_atoms.detach().cpu(),
+        pred_num_atoms_per_token.detach().cpu(),
+    ):
+        raise ProtectedChainMatchError("token_identity_token_atom_count_mismatch")
+
+    gt_start_index = _token_atom_start_index(gt_num_atoms_per_token)
+    atom_subset_index = -torch.ones(
+        pred_positions_aligned.shape[0],
+        dtype=torch.long,
+        device=pred_positions_aligned.device,
+    )
+
+    pred_atom_start = 0
+    for pred_token_row, gt_token_row in enumerate(
+        gt_token_subset_index.detach().cpu().tolist()
+    ):
+        num_atoms = int(pred_num_atoms_per_token[pred_token_row].item())
+        gt_atom_start = int(gt_start_index[gt_token_row].item())
+        atom_subset_index[pred_atom_start : pred_atom_start + num_atoms] = torch.arange(
+            gt_atom_start,
+            gt_atom_start + num_atoms,
+            dtype=torch.long,
+            device=atom_subset_index.device,
+        )
+        pred_atom_start += num_atoms
+
+    if torch.any(atom_subset_index < 0):
+        raise ProtectedChainMatchError("token_identity_unassigned_atom_index")
+
+    return atom_subset_index
+
+
+def get_token_identity_atom_permutation_index(
+    *,
+    gt_positions: torch.Tensor,
+    gt_resolved_mask: torch.Tensor,
+    gt_token_index: torch.Tensor,
+    gt_num_atoms_per_token: torch.Tensor,
+    gt_asym_id: torch.Tensor | None = None,
+    pred_positions_aligned: torch.Tensor,
+    pred_token_index: torch.Tensor,
+    pred_num_atoms_per_token: torch.Tensor,
+    pred_asym_id: torch.Tensor | None = None,
+    pred_ref_space_uid: torch.Tensor,
+    pred_ref_space_uid_to_perm: dict[int, torch.Tensor],
+) -> torch.Tensor:
+    """Select GT atoms by token identity and resolve atom-level symmetry."""
+    gt_token_subset_index = get_token_identity_gt_token_subset_index(
+        gt_token_index=gt_token_index,
+        pred_token_index=pred_token_index,
+        gt_asym_id=gt_asym_id,
+        pred_asym_id=pred_asym_id,
+    )
+    identity_atom_index = _token_identity_atom_index_before_symmetry(
+        gt_positions=gt_positions,
+        gt_token_subset_index=gt_token_subset_index,
+        gt_num_atoms_per_token=gt_num_atoms_per_token,
+        pred_positions_aligned=pred_positions_aligned,
+        pred_num_atoms_per_token=pred_num_atoms_per_token,
+    )
+    if pred_ref_space_uid.shape[0] != pred_positions_aligned.shape[0]:
+        raise ProtectedChainMatchError("token_identity_ref_space_uid_count_mismatch")
+
+    gt_resolved_mask = gt_resolved_mask.bool()
+    atom_subset_index = -torch.ones_like(identity_atom_index)
+    for ref_space_uid in torch.unique(pred_ref_space_uid).detach().cpu().tolist():
+        pred_mask = pred_ref_space_uid == ref_space_uid
+        gt_atom_idx_subset = identity_atom_index[pred_mask]
+        gt_positions_subset = gt_positions[gt_atom_idx_subset]
+        gt_resolved_mask_subset = gt_resolved_mask[gt_atom_idx_subset]
+        pred_positions_subset = pred_positions_aligned[pred_mask]
+
+        if ref_space_uid not in pred_ref_space_uid_to_perm:
+            raise ProtectedChainMatchError(
+                "token_identity_missing_ref_space_permutation"
+            )
+        permutations = pred_ref_space_uid_to_perm[ref_space_uid].to(
+            device=gt_atom_idx_subset.device,
+            dtype=torch.long,
+        )
+        if permutations.ndim == 1:
+            permutations = permutations.unsqueeze(0)
+        if permutations.shape[-1] != gt_atom_idx_subset.shape[0]:
+            raise ProtectedChainMatchError(
+                "token_identity_ref_space_permutation_size_mismatch"
+            )
+
+        check_out_of_bounds_indices(
+            indices=permutations,
+            input_tensor=gt_atom_idx_subset,
+        )
+        if permutations.shape[0] == 1:
+            best_permutation = permutations[0]
+        else:
+            gt_positions_permuted = gt_positions_subset[permutations]
+            gt_resolved_mask_permuted = gt_resolved_mask_subset[permutations]
+            dists_sq = (
+                (pred_positions_subset - gt_positions_permuted)
+                .pow(2)
+                .sum(dim=-1)
+                .mul(gt_resolved_mask_permuted)
+            )
+            n_resolved_atoms = gt_resolved_mask_permuted.sum(dim=-1)
+            rmsd = torch.full(
+                (permutations.shape[0],),
+                torch.inf,
+                dtype=pred_positions_subset.dtype,
+                device=pred_positions_subset.device,
+            )
+            resolved = n_resolved_atoms > 0
+            if torch.any(resolved):
+                rmsd[resolved] = torch.sqrt(
+                    dists_sq.sum(dim=-1)[resolved] / n_resolved_atoms[resolved]
+                )
+                best_permutation = permutations[torch.argmin(rmsd)]
+            else:
+                best_permutation = permutations[0]
+
+        atom_subset_index[pred_mask] = gt_atom_idx_subset[best_permutation]
+
+    if torch.any(atom_subset_index < 0):
+        raise ProtectedChainMatchError("token_identity_unassigned_final_atom_index")
+
+    return atom_subset_index
+
+
 def get_final_atom_permutation_index(
     gt_positions: torch.Tensor,
     gt_resolved_mask: torch.Tensor,
@@ -1581,6 +1776,49 @@ def find_sequence_compatible_identity_mol_permutation(
     return mapping, diagnostics
 
 
+def _alignment_token_center_atom_indices(
+    batch: dict,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if "physppi_token_center_atom_index" in batch:
+        center_index = batch["physppi_token_center_atom_index"].long()
+        return center_index, torch.ones_like(center_index, dtype=torch.bool)
+
+    center_index, token_atom_mask = get_token_center_atom_indices(batch)
+    if "num_atoms_per_token" not in batch:
+        return center_index.long(), token_atom_mask.bool()
+
+    single_atom_token_mask = batch["num_atoms_per_token"].long() == 1
+    center_index = torch.where(
+        single_atom_token_mask,
+        batch["start_atom_index"].long(),
+        center_index.long(),
+    )
+    token_atom_mask = torch.where(
+        single_atom_token_mask,
+        torch.ones_like(token_atom_mask, dtype=torch.bool),
+        token_atom_mask.bool(),
+    )
+    return center_index, token_atom_mask
+
+
+def _get_valid_token_center_atoms(
+    batch: dict,
+    positions: torch.Tensor,
+    atom_mask: torch.Tensor,
+    token_mask: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Extract token centers after dropping padded token rows."""
+    center_index, token_atom_mask = _alignment_token_center_atom_indices(batch)
+    center_index = center_index[token_mask].long()
+    token_atom_mask = token_atom_mask[token_mask].bool()
+    if torch.any((center_index < 0) | (center_index >= positions.shape[-2])):
+        raise ProtectedChainMatchError("invalid_token_center_index")
+    center_positions = positions[center_index]
+    center_mask = atom_mask[center_index].bool() & token_atom_mask
+    center_mask &= torch.isfinite(center_positions).all(dim=-1)
+    return center_positions, center_mask
+
+
 def single_batch_multi_chain_permutation_alignment(
     single_batch: dict,
     single_predicted_positions: torch.Tensor,
@@ -1643,6 +1881,102 @@ def single_batch_multi_chain_permutation_alignment(
 
     gt_coords = gt_batch["atom_positions"][gt_atom_pad_mask]
     gt_resolved_mask = gt_batch["atom_resolved_mask"][gt_atom_pad_mask].bool()
+    pred_coords = single_predicted_positions[pred_atom_pad_mask]
+
+    # Subset coordinates to only token centers (generalization of C-alpha in
+    # AF2-Multimer algorithm)
+    gt_token_center_coords, gt_token_center_mask = _get_valid_token_center_atoms(
+        gt_batch,
+        gt_batch["atom_positions"],
+        gt_batch["atom_resolved_mask"],
+        gt_token_pad_mask,
+    )
+
+    # Here everything is "resolved" because the model predicts all coordinates so no
+    # need to pass an actual mask
+    pred_coords_dummy_mask = torch.ones_like(
+        single_predicted_positions[:, 0], dtype=torch.bool
+    )
+    pred_token_center_coords, _ = _get_valid_token_center_atoms(
+        single_batch,
+        single_predicted_positions,
+        pred_coords_dummy_mask,
+        pred_token_pad_mask,
+    )
+
+    # ASSIGNMENT STAGE
+    if chain_assignment == "token_identity":
+        gt_token_index = gt_batch["token_index"][gt_token_pad_mask]
+        pred_token_index = single_batch["token_index"][pred_token_pad_mask]
+        gt_asym_id = (
+            gt_batch["asym_id"][gt_token_pad_mask] if "asym_id" in gt_batch else None
+        )
+        pred_asym_id = (
+            single_batch["asym_id"][pred_token_pad_mask]
+            if "asym_id" in single_batch
+            else None
+        )
+        gt_token_subset_index = get_token_identity_gt_token_subset_index(
+            gt_token_index=gt_token_index,
+            pred_token_index=pred_token_index,
+            gt_asym_id=gt_asym_id,
+            pred_asym_id=pred_asym_id,
+        )
+        token_identity_target = gt_token_center_coords[gt_token_subset_index]
+        token_identity_mask = gt_token_center_mask[gt_token_subset_index].bool()
+        token_identity_mask &= torch.isfinite(token_identity_target).all(dim=-1)
+        token_identity_mask &= torch.isfinite(pred_token_center_coords).all(dim=-1)
+        if not torch.any(token_identity_mask):
+            raise ProtectedChainMatchError("token_identity_no_resolved_token_centers")
+
+        pred_to_gt_transformation = get_optimal_transformation(
+            mobile_positions=pred_token_center_coords,
+            target_positions=token_identity_target,
+            positions_mask=token_identity_mask,
+        )
+        token_identity_prediction = apply_transformation(
+            pred_token_center_coords,
+            pred_to_gt_transformation,
+        )
+        token_identity_rmsd = torch.sqrt(
+            (
+                token_identity_prediction[token_identity_mask]
+                - token_identity_target[token_identity_mask]
+            )
+            .square()
+            .sum(dim=-1)
+            .mean()
+        )
+        diagnostics = {
+            "accepted": True,
+            "fallback": "none",
+            "reason": "token_index_identity",
+            "identity_rmsd": float(token_identity_rmsd.item()),
+            "candidate_rmsd": float(token_identity_rmsd.item()),
+            "matched_coverage": int(token_identity_mask.sum().item()),
+        }
+        single_batch["physppi_chain_match_diagnostic"] = diagnostics
+
+        pred_coords_aligned = apply_transformation(
+            pred_coords,
+            pred_to_gt_transformation,
+        )
+        return get_token_identity_atom_permutation_index(
+            gt_positions=gt_coords,
+            gt_resolved_mask=gt_resolved_mask,
+            gt_token_index=gt_token_index,
+            gt_num_atoms_per_token=gt_batch["num_atoms_per_token"][gt_token_pad_mask],
+            gt_asym_id=gt_asym_id,
+            pred_positions_aligned=pred_coords_aligned,
+            pred_token_index=pred_token_index,
+            pred_num_atoms_per_token=single_batch["num_atoms_per_token"][
+                pred_token_pad_mask
+            ],
+            pred_asym_id=pred_asym_id,
+            pred_ref_space_uid=single_batch["ref_space_uid"][pred_atom_pad_mask],
+            pred_ref_space_uid_to_perm=single_batch["ref_space_uid_to_perm"],
+        )
+
     gt_mol_entity_id = gt_batch["mol_entity_id"][gt_token_pad_mask]
     gt_mol_sym_id = gt_batch["mol_sym_id"][gt_token_pad_mask]
     gt_mol_sym_component_id = gt_batch["mol_sym_component_id"][
@@ -1650,7 +1984,6 @@ def single_batch_multi_chain_permutation_alignment(
     ]  # TODO: change this to atom-wise?
     gt_mol_sym_token_index = gt_batch["mol_sym_token_index"][gt_token_pad_mask]
     gt_num_atoms_per_token = gt_batch["num_atoms_per_token"][gt_token_pad_mask]
-    pred_coords = single_predicted_positions[pred_atom_pad_mask]
     pred_mol_entity_id = single_batch["mol_entity_id"][pred_token_pad_mask]
     pred_mol_sym_id = single_batch["mol_sym_id"][pred_token_pad_mask]
     pred_mol_sym_component_id = single_batch["mol_sym_component_id"][
@@ -1660,24 +1993,6 @@ def single_batch_multi_chain_permutation_alignment(
     pred_ref_space_uid = single_batch["ref_space_uid"][pred_atom_pad_mask]
     pred_ref_space_uid_to_perm = single_batch["ref_space_uid_to_perm"]
     pred_num_atoms_per_token = single_batch["num_atoms_per_token"][pred_token_pad_mask]
-
-    # Subset coordinates to only token centers (generalization of C-alpha in
-    # AF2-Multimer algorithm)
-    gt_token_center_coords, gt_token_center_mask = get_token_center_atoms(
-        gt_batch, gt_batch["atom_positions"], gt_batch["atom_resolved_mask"]
-    )
-    gt_token_center_coords = gt_token_center_coords[gt_token_pad_mask]
-    gt_token_center_mask = gt_token_center_mask[gt_token_pad_mask]
-
-    # Here everything is "resolved" because the model predicts all coordinates so no
-    # need to pass an actual mask
-    pred_coords_dummy_mask = torch.ones_like(
-        single_predicted_positions[:, 0], dtype=torch.bool
-    )
-    pred_token_center_coords, _ = get_token_center_atoms(
-        single_batch, single_predicted_positions, pred_coords_dummy_mask
-    )
-    pred_token_center_coords = pred_token_center_coords[pred_token_pad_mask]
 
     # ASSIGNMENT STAGE
     # Protect molecule-level assignment while retaining OF3's atom-level symmetry
@@ -2049,10 +2364,11 @@ def safe_multi_chain_permutation_alignment(
         batch=batch, atom_positions_predicted=atom_positions_predicted
     )
 
-    center_index, _ = get_token_center_atom_indices(per_sample_batch)
+    center_index, _ = _alignment_token_center_atom_indices(per_sample_batch)
     invalid_center_index = (center_index < 0) | (
         center_index >= per_sample_atom_pos_pred.shape[-2]
     )
+    invalid_center_index &= per_sample_batch["token_mask"].bool()
     if torch.any(invalid_center_index):
         pdb_ids = batch.get("pdb_id", ("<missing>",))
         logger.error(
@@ -2067,22 +2383,35 @@ def safe_multi_chain_permutation_alignment(
         new_gt_features = multi_chain_permutation_alignment(
             batch=per_sample_batch,
             atom_positions_predicted=per_sample_atom_pos_pred,
-            chain_assignment="protected",
+            chain_assignment="token_identity",
         )
-    except ProtectedChainMatchError as error:
+    except ProtectedChainMatchError as token_identity_error:
         pdb_ids = batch.get("pdb_id", ("<missing>",))
-        logger.error(
-            "Protected chain matching failed for pdb_id=%s; using deterministic "
-            "sequence-compatible identity mapping: %s",
+        logger.warning(
+            "Token-index identity alignment failed for pdb_id=%s; trying protected "
+            "chain matching: %s",
             ", ".join(map(str, pdb_ids)),
-            error,
+            token_identity_error,
         )
-        new_gt_features = multi_chain_permutation_alignment(
-            batch=per_sample_batch,
-            atom_positions_predicted=per_sample_atom_pos_pred,
-            chain_assignment="identity",
-            fallback_reason=str(error),
-        )
+        try:
+            new_gt_features = multi_chain_permutation_alignment(
+                batch=per_sample_batch,
+                atom_positions_predicted=per_sample_atom_pos_pred,
+                chain_assignment="protected",
+            )
+        except ProtectedChainMatchError as protected_error:
+            logger.error(
+                "Protected chain matching failed for pdb_id=%s; using deterministic "
+                "sequence-compatible identity mapping: %s",
+                ", ".join(map(str, pdb_ids)),
+                protected_error,
+            )
+            new_gt_features = multi_chain_permutation_alignment(
+                batch=per_sample_batch,
+                atom_positions_predicted=per_sample_atom_pos_pred,
+                chain_assignment="identity",
+                fallback_reason=str(protected_error),
+            )
 
     new_gt_features = format_output_gt_features(
         ground_truth_features=new_gt_features,

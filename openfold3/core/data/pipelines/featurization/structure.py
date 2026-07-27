@@ -143,41 +143,34 @@ def featurize_structure_of3(
             atom_array.mol_sym_component_id[token_starts], dtype=torch.int32
         )
 
+    # Chain labels are present on both target and GT AtomArrays.  Keep them on the GT
+    # side too so training-time alignment can use the source ordering directly.
+    chain_ids_token = atom_array.chain_id[token_starts]
+    unique_ids, renum_ids = np.unique(chain_ids_token, return_inverse=True)
+    asym_id = torch.tensor(renum_ids + 1, dtype=torch.int32)
+
+    unique_asym_ids = torch.unique_consecutive(asym_id)
+    if len(unique_ids) != len(unique_asym_ids):
+        warn_msg = "Chain IDs are not unique within complex."
+        if add_perm_features:
+            raise ValueError(
+                f"{warn_msg} Input IDs: {np.unique(chain_ids_token).tolist()}, "
+                f"Asym IDs: {unique_asym_ids}"
+            )
+        logger.warning(warn_msg)
+
+    features["asym_id"] = asym_id
+    features["entity_id"] = torch.tensor(
+        atom_array.entity_id[token_starts], dtype=torch.int32
+    )
+    features["sym_id"] = torch.tensor(
+        create_sym_id(entity_ids, atom_array, token_starts), dtype=torch.int32
+    )
+
     if not is_gt:
         # Indexing
         features["residue_index"] = torch.tensor(
             atom_array.res_id[token_starts], dtype=torch.int32
-        )
-
-        # Chain IDs are int-like in our training code, but not necessarily in inference
-        chain_ids_token = atom_array.chain_id[token_starts]
-
-        # Renumber these as numerical IDs (starting from 1)
-        unique_ids, renum_ids = np.unique(chain_ids_token, return_inverse=True)
-        asym_id = torch.tensor(renum_ids + 1, dtype=torch.int32)
-
-        unique_asym_ids = torch.unique_consecutive(asym_id)
-        if len(unique_ids) != len(unique_asym_ids):
-            warn_msg = "Chain IDs are not unique within complex."
-            if add_perm_features:
-                # Raise error during training and skip the sample
-                unique_input_asym_ids = torch.unique_consecutive(
-                    torch.tensor(chain_ids_token.astype(int), dtype=torch.int32)
-                )
-                raise ValueError(
-                    f"{warn_msg} Input IDs: {unique_input_asym_ids}, "
-                    f"Asym IDs: {unique_asym_ids}"
-                )
-            else:
-                logger.warning(warn_msg)
-
-        features["asym_id"] = asym_id
-
-        features["entity_id"] = torch.tensor(
-            atom_array.entity_id[token_starts], dtype=torch.int32
-        )
-        features["sym_id"] = torch.tensor(
-            create_sym_id(entity_ids, atom_array, token_starts), dtype=torch.int32
         )
 
         # Bonds

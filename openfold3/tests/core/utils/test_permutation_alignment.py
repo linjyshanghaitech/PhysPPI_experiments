@@ -9,6 +9,7 @@ import openfold3.core.utils.permutation_alignment as permutation_alignment
 from openfold3.core.data.framework.single_datasets.dataset_utils import (
     check_invalid_feature_dict,
 )
+from openfold3.core.data.resources.residues import STANDARD_RESIDUES_WITH_GAP_3
 from openfold3.core.utils.permutation_alignment import (
     find_greedy_optimal_mol_permutation,
     reshape_per_sample_inputs,
@@ -172,7 +173,7 @@ def test_protected_failure_uses_identity_without_zeroing_losses(monkeypatch):
         fallback_reason="",
     ):
         calls.append(chain_assignment)
-        if chain_assignment == "protected":
+        if chain_assignment in {"token_identity", "protected"}:
             raise ProtectedChainMatchError("historical_token_mismatch")
         batch["physppi_chain_match_diagnostics"] = [
             {
@@ -216,12 +217,129 @@ def test_protected_failure_uses_identity_without_zeroing_losses(monkeypatch):
 
     permutation_alignment.safe_multi_chain_permutation_alignment(batch, predicted)
 
-    assert calls == ["protected", "identity"]
+    assert calls == ["token_identity", "protected", "identity"]
     assert batch["loss_weights"]["diffusion"].all()
     assert batch["physppi_chain_match_diagnostics"][0]["fallback"] == "identity"
     assert batch["physppi_chain_match_diagnostics"][0]["reason"] == (
         "historical_token_mismatch"
     )
+
+
+def test_safe_alignment_prefers_token_identity_before_chain_matching(monkeypatch):
+    calls: list[str] = []
+
+    def fake_alignment(
+        batch,
+        atom_positions_predicted,
+        *,
+        chain_assignment,
+        fallback_reason="",
+    ):
+        calls.append(chain_assignment)
+        if chain_assignment != "token_identity":
+            raise AssertionError("chain-level alignment should not run first")
+        batch["physppi_chain_match_diagnostics"] = [
+            {
+                "accepted": True,
+                "fallback": "none",
+                "reason": "token_index_identity",
+                "identity_rmsd": 0.0,
+                "candidate_rmsd": 0.0,
+                "matched_coverage": 1,
+            }
+        ]
+        return {
+            "atom_positions": atom_positions_predicted.clone(),
+            "atom_resolved_mask": torch.ones_like(
+                atom_positions_predicted[..., 0], dtype=torch.bool
+            ),
+        }
+
+    monkeypatch.setattr(
+        permutation_alignment,
+        "multi_chain_permutation_alignment",
+        fake_alignment,
+    )
+
+    predicted = torch.zeros(1, 1, 3)
+    batch = {
+        "start_atom_index": torch.tensor([[0]]),
+        "is_protein": torch.ones(1, 1),
+        "is_atomized": torch.zeros(1, 1),
+        "is_dna": torch.zeros(1, 1),
+        "is_rna": torch.zeros(1, 1),
+        "restype": torch.zeros(1, 1, 32),
+        "token_mask": torch.ones(1, 1),
+        "atom_mask": torch.ones(1, 1),
+        "ground_truth": {
+            "atom_positions": torch.zeros(1, 1, 3),
+            "atom_resolved_mask": torch.ones(1, 1),
+        },
+    }
+
+    permutation_alignment.safe_multi_chain_permutation_alignment(batch, predicted)
+
+    assert calls == ["token_identity"]
+    assert batch["physppi_chain_match_diagnostics"][0]["reason"] == (
+        "token_index_identity"
+    )
+
+
+def test_safe_alignment_ignores_padded_token_center_indices(monkeypatch):
+    calls: list[str] = []
+
+    def fake_alignment(
+        batch,
+        atom_positions_predicted,
+        *,
+        chain_assignment,
+        fallback_reason="",
+    ):
+        calls.append(chain_assignment)
+        batch["physppi_chain_match_diagnostics"] = [
+            {
+                "accepted": True,
+                "fallback": "none",
+                "reason": "token_index_identity",
+                "identity_rmsd": 0.0,
+                "candidate_rmsd": 0.0,
+                "matched_coverage": 1,
+            }
+        ]
+        return {
+            "atom_positions": atom_positions_predicted.clone(),
+            "atom_resolved_mask": torch.ones_like(
+                atom_positions_predicted[..., 0], dtype=torch.bool
+            ),
+        }
+
+    monkeypatch.setattr(
+        permutation_alignment,
+        "multi_chain_permutation_alignment",
+        fake_alignment,
+    )
+
+    predicted = torch.zeros(1, 1, 3)
+    restype = torch.zeros(1, 2, 32)
+    restype[..., 0] = 1
+    batch = {
+        "start_atom_index": torch.tensor([[0, 1]]),
+        "is_protein": torch.zeros(1, 2),
+        "is_atomized": torch.ones(1, 2),
+        "is_dna": torch.zeros(1, 2),
+        "is_rna": torch.zeros(1, 2),
+        "restype": restype,
+        "token_mask": torch.tensor([[True, False]]),
+        "atom_mask": torch.ones(1, 1),
+        "ground_truth": {
+            "atom_positions": torch.zeros(1, 1, 3),
+            "atom_resolved_mask": torch.ones(1, 1),
+        },
+    }
+
+    permutation_alignment.safe_multi_chain_permutation_alignment(batch, predicted)
+
+    assert calls == ["token_identity"]
 
 
 def test_identity_fallback_finds_complete_sequence_compatible_assignment(monkeypatch):
@@ -390,6 +508,178 @@ def test_training_alignment_routes_chain_assignment_through_protected_matcher(
     assert protected_calls == ["protected"]
     assert torch.equal(atom_index, torch.arange(4))
     assert batch["physppi_chain_match_diagnostic"] == diagnostics
+
+
+def _atomized_alignment_token_features(token_count: int) -> dict:
+    restype = torch.zeros(token_count, len(STANDARD_RESIDUES_WITH_GAP_3))
+    restype[:, 0] = 1
+    return {
+        "token_index": torch.arange(10, 10 + token_count),
+        "token_mask": torch.ones(token_count, dtype=torch.bool),
+        "atom_mask": torch.ones(token_count, dtype=torch.bool),
+        "num_atoms_per_token": torch.ones(token_count, dtype=torch.long),
+        "start_atom_index": torch.arange(token_count),
+        "restype": restype,
+        "is_protein": torch.zeros(token_count, dtype=torch.long),
+        "is_rna": torch.zeros(token_count, dtype=torch.long),
+        "is_dna": torch.zeros(token_count, dtype=torch.long),
+        "is_ligand": torch.zeros(token_count, dtype=torch.long),
+        "is_atomized": torch.ones(token_count, dtype=torch.long),
+        "asym_id": torch.tensor([1, 1, 2, 2], dtype=torch.long)[:token_count],
+        "entity_id": torch.ones(token_count, dtype=torch.long),
+        "sym_id": torch.tensor([1, 1, 2, 2], dtype=torch.long)[:token_count],
+        "mol_entity_id": torch.ones(token_count, dtype=torch.long),
+        "mol_sym_id": torch.tensor([1, 1, 2, 2], dtype=torch.long)[:token_count],
+        "mol_sym_component_id": torch.arange(token_count),
+        "mol_sym_token_index": torch.arange(token_count),
+    }
+
+
+def test_token_identity_alignment_bypasses_chain_level_matchers(monkeypatch):
+    def fail_chain_assignment(*_args, **_kwargs):
+        raise AssertionError("chain-level matcher must not run")
+
+    monkeypatch.setattr(
+        permutation_alignment,
+        "find_protected_mol_permutation",
+        fail_chain_assignment,
+    )
+    monkeypatch.setattr(
+        permutation_alignment,
+        "find_greedy_optimal_mol_permutation",
+        fail_chain_assignment,
+    )
+
+    coordinates = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    common_tokens = _atomized_alignment_token_features(4)
+    batch = {
+        **common_tokens,
+        "ref_space_uid": torch.arange(4),
+        "ref_space_uid_to_perm": {
+            index: torch.zeros(1, 1, dtype=torch.long) for index in range(4)
+        },
+        "ground_truth": {
+            **common_tokens,
+            "atom_positions": coordinates.clone(),
+            "atom_resolved_mask": torch.ones(4, dtype=torch.bool),
+        },
+    }
+
+    atom_index = permutation_alignment.single_batch_multi_chain_permutation_alignment(
+        batch,
+        coordinates.clone(),
+        chain_assignment="token_identity",
+    )
+
+    assert torch.equal(atom_index, torch.arange(4))
+    assert batch["physppi_chain_match_diagnostic"]["reason"] == "token_index_identity"
+
+
+def test_token_identity_alignment_ignores_padded_token_center_indices():
+    restype = torch.zeros(2, len(STANDARD_RESIDUES_WITH_GAP_3))
+    restype[:, 0] = 1
+    common_tokens = {
+        "token_index": torch.tensor([10, 0]),
+        "token_mask": torch.tensor([True, False]),
+        "atom_mask": torch.tensor([True]),
+        "num_atoms_per_token": torch.tensor([1, 0]),
+        "start_atom_index": torch.tensor([0, 1]),
+        "restype": restype,
+        "is_protein": torch.zeros(2, dtype=torch.long),
+        "is_rna": torch.zeros(2, dtype=torch.long),
+        "is_dna": torch.zeros(2, dtype=torch.long),
+        "is_ligand": torch.zeros(2, dtype=torch.long),
+        "is_atomized": torch.ones(2, dtype=torch.long),
+        "asym_id": torch.tensor([1, 0]),
+        "entity_id": torch.tensor([1, 0]),
+        "sym_id": torch.tensor([1, 0]),
+    }
+    coordinates = torch.zeros(1, 3)
+    batch = {
+        **common_tokens,
+        "ref_space_uid": torch.tensor([0]),
+        "ref_space_uid_to_perm": {0: torch.zeros(1, 1, dtype=torch.long)},
+        "ground_truth": {
+            **common_tokens,
+            "atom_positions": coordinates.clone(),
+            "atom_resolved_mask": torch.ones(1, dtype=torch.bool),
+        },
+    }
+
+    atom_index = permutation_alignment.single_batch_multi_chain_permutation_alignment(
+        batch,
+        coordinates.clone(),
+        chain_assignment="token_identity",
+    )
+
+    assert torch.equal(atom_index, torch.tensor([0]))
+
+
+def test_token_identity_alignment_uses_single_atom_tokens_as_centers():
+    restype = torch.zeros(1, len(STANDARD_RESIDUES_WITH_GAP_3))
+    restype[:, 0] = 1
+    common_tokens = {
+        "token_index": torch.tensor([10]),
+        "token_mask": torch.tensor([True]),
+        "atom_mask": torch.tensor([True]),
+        "num_atoms_per_token": torch.tensor([1]),
+        "start_atom_index": torch.tensor([0]),
+        "restype": restype,
+        "is_protein": torch.ones(1, dtype=torch.long),
+        "is_rna": torch.zeros(1, dtype=torch.long),
+        "is_dna": torch.zeros(1, dtype=torch.long),
+        "is_ligand": torch.zeros(1, dtype=torch.long),
+        "is_atomized": torch.zeros(1, dtype=torch.long),
+        "asym_id": torch.tensor([1]),
+        "entity_id": torch.tensor([1]),
+        "sym_id": torch.tensor([1]),
+    }
+    coordinates = torch.zeros(1, 3)
+    batch = {
+        **common_tokens,
+        "ref_space_uid": torch.tensor([0]),
+        "ref_space_uid_to_perm": {0: torch.zeros(1, 1, dtype=torch.long)},
+        "ground_truth": {
+            **common_tokens,
+            "atom_positions": coordinates.clone(),
+            "atom_resolved_mask": torch.ones(1, dtype=torch.bool),
+        },
+    }
+
+    atom_index = permutation_alignment.single_batch_multi_chain_permutation_alignment(
+        batch,
+        coordinates.clone(),
+        chain_assignment="token_identity",
+    )
+
+    assert torch.equal(atom_index, torch.tensor([0]))
+
+
+def test_token_identity_atom_permutation_resolves_intra_token_symmetry():
+    atom_index = permutation_alignment.get_token_identity_atom_permutation_index(
+        gt_positions=torch.tensor([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]]),
+        gt_resolved_mask=torch.ones(2, dtype=torch.bool),
+        gt_token_index=torch.tensor([42]),
+        gt_num_atoms_per_token=torch.tensor([2]),
+        gt_asym_id=torch.tensor([1]),
+        pred_positions_aligned=torch.tensor([[10.1, 0.0, 0.0], [-0.1, 0.0, 0.0]]),
+        pred_token_index=torch.tensor([42]),
+        pred_num_atoms_per_token=torch.tensor([2]),
+        pred_asym_id=torch.tensor([1]),
+        pred_ref_space_uid=torch.tensor([7, 7]),
+        pred_ref_space_uid_to_perm={
+            7: torch.tensor([[0, 1], [1, 0]], dtype=torch.long)
+        },
+    )
+
+    assert torch.equal(atom_index, torch.tensor([1, 0]))
 
 
 def _valid_feature_dict() -> dict:

@@ -53,6 +53,22 @@ EXPERIMENT_CONFIG_CASES = (
             "PHYSPPI_OUTPUT_ROOT",
         },
     ),
+    (
+        Path(
+            "configs/experiments/permutation_alignment/"
+            "inspect_chain_identity_alignment.toml"
+        ),
+        "inspect-chain-identity-alignment-v1",
+        {
+            "PHYSPPI_DEBUG_DATASET",
+            "PHYSPPI_DEBUG_SAMPLE_ID",
+            "PHYSPPI_QBIOLIP_ROOT",
+            "PHYSPPI_AFDB_ROOT",
+            "PHYSPPI_FORMAL_ROOT",
+            "PHYSPPI_COMPONENTS_CIF",
+            "PHYSPPI_OUTPUT_ROOT",
+        },
+    ),
 )
 SLURM_PROFILE_CASES = (
     (Path("configs/slurm/cpu_debug.toml"), None),
@@ -150,6 +166,8 @@ def _make_real_config_inputs(tmp_path: Path) -> dict[str, str]:
     _touch(msa_cache / "colabfold_msas/mappings/rep_id_to_seq.json")
 
     return {
+        "PHYSPPI_DEBUG_DATASET": "afdb",
+        "PHYSPPI_DEBUG_SAMPLE_ID": "AF-fixture",
         "PHYSPPI_QBIOLIP_ROOT": str(qbiolip_root),
         "PHYSPPI_AFDB_ROOT": str(afdb_root),
         "PHYSPPI_FORMAL_ROOT": str(formal_root),
