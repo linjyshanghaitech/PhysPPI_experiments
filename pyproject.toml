@@ -53,6 +53,7 @@ dependencies = [
     "tqdm",
     "typing-extensions",
     "lmdb", # == 1.6  # This verison might be required to avoid Error during training
+    "tomli>=2; python_version < '3.11'",
 ]
 
 optional-dependencies.dev = [
@@ -176,7 +177,7 @@ log_cli = true
 log_cli_level = "WARNING"
 log_cli_format = "%(asctime)s [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)"
 log_cli_date_format = "%Y-%m-%d %H:%M:%S"
-testpaths = ["openfold3/tests"]
+testpaths = ["openfold3/tests", "tests"]
 python_files = ["test_*.py"]
 markers = [
     "inference_verification: Tests to verify installation on inference example",
