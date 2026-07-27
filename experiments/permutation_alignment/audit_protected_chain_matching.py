@@ -85,6 +85,16 @@ _PRODUCTION_WORK_ROOTS: dict[ProductionPaths, tempfile.TemporaryDirectory[str]] 
 _PRODUCTION_DATASETS: dict[tuple[ProductionPaths, DatasetName], object] = {}
 
 
+def cleanup_production_cache(paths: ProductionPaths) -> None:
+    """Release cached datasets before deleting one configuration's work root."""
+    for key in tuple(_PRODUCTION_DATASETS):
+        if key[0] == paths:
+            _PRODUCTION_DATASETS.pop(key)
+    temporary = _PRODUCTION_WORK_ROOTS.pop(paths, None)
+    if temporary is not None:
+        temporary.cleanup()
+
+
 class ProtectedMatchAuditRecord(BaseModel):
     """One terminal protected-matcher diagnostic for one exact source ID."""
 
@@ -416,11 +426,15 @@ def main() -> None:
         evaluator = _load_evaluator(args.evaluator)
     else:
         evaluator = partial(production_match_evaluator, paths)
-    run_protected_match_audit(
-        args.runtime_ledger,
-        args.output,
-        evaluator,
-    )
+    try:
+        run_protected_match_audit(
+            args.runtime_ledger,
+            args.output,
+            evaluator,
+        )
+    finally:
+        if paths is not None:
+            cleanup_production_cache(paths)
 
 
 if __name__ == "__main__":

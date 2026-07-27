@@ -1,12 +1,22 @@
 import copy
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
 
-COMPONENTS_CIF = (
-    "/101045/jinyu/PhysPPI/openfold-3/output/physppi_msa_cache/components.cif"
-)
+
+def _components_cif() -> str:
+    return os.environ["PHYSPPI_COMPONENTS_CIF"]
+
+
+@pytest.fixture(autouse=True)
+def _portable_production_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENFOLD3_CHECKPOINT", str(tmp_path / "canonical.pt"))
+    monkeypatch.setenv("PHYSPPI_COMPONENTS_CIF", str(tmp_path / "components.cif"))
 
 
 def _load_module():
@@ -65,8 +75,8 @@ def _baseline() -> dict[str, object]:
             }
         },
         "dataset_paths": {
-            "qbiolip10k": {"ccd_file": COMPONENTS_CIF},
-            "afdb10k": {"ccd_file": COMPONENTS_CIF},
+            "qbiolip10k": {"ccd_file": _components_cif()},
+            "afdb10k": {"ccd_file": _components_cif()},
         },
     }
 

@@ -25,14 +25,6 @@ from typing import Any
 
 import yaml
 
-CANONICAL_CHECKPOINT = os.environ.get(
-    "OPENFOLD3_CHECKPOINT",
-    str(Path.home() / ".openfold3/of3-p2-155k.pt"),
-)
-COMPONENTS_CIF = os.environ.get(
-    "PHYSPPI_COMPONENTS_CIF",
-    str(Path.home() / "PhysPPI/openfold-3/output/physppi_msa_cache/components.cif"),
-)
 TRAINING_SCOPE = "physppi_lora_assessment"
 LORA_GROUPS = [
     {
@@ -111,6 +103,20 @@ _RECOVERY_LOAD_SETTINGS = {
 }
 
 
+def _canonical_checkpoint_path() -> str:
+    return os.environ.get(
+        "OPENFOLD3_CHECKPOINT",
+        str(Path.home() / ".openfold3/of3-p2-155k.pt"),
+    )
+
+
+def _components_cif_path() -> str:
+    return os.environ.get(
+        "PHYSPPI_COMPONENTS_CIF",
+        str(Path.home() / "PhysPPI/openfold-3/output/physppi_msa_cache/components.cif"),
+    )
+
+
 def _sha256(path: Path) -> str:
     with path.open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
@@ -173,7 +179,7 @@ def _apply_contract(
         "mode": "train",
         "output_dir": _output_dir(config, version, smoke=smoke),
         "seed": 42,
-        "restart_checkpoint_path": CANONICAL_CHECKPOINT,
+        "restart_checkpoint_path": _canonical_checkpoint_path(),
         "preemption_safe_resume": False,
         "ckpt_load_settings": copy.deepcopy(_COLD_LOAD_SETTINGS),
     }
@@ -243,7 +249,7 @@ def _apply_contract(
         weight=0.2,
     )
     for name in ("qbiolip10k", "afdb10k"):
-        config["dataset_paths"][name]["ccd_file"] = COMPONENTS_CIF
+        config["dataset_paths"][name]["ccd_file"] = _components_cif_path()
 
 
 def _require_equal(actual: Any, expected: Any, label: str) -> None:
@@ -444,7 +450,7 @@ def validate_semantic_config(
         )
         _require_equal(
             typed["dataset_paths"][name]["ccd_file"],
-            COMPONENTS_CIF,
+            _components_cif_path(),
             f"{name} ccd_file",
         )
 
@@ -458,12 +464,12 @@ def validate_semantic_config(
         experiment["ckpt_load_settings"], expected_load, "checkpoint load settings"
     )
     if recovery:
-        if experiment["restart_checkpoint_path"] == CANONICAL_CHECKPOINT:
+        if experiment["restart_checkpoint_path"] == _canonical_checkpoint_path():
             raise ValueError("recovery requires a complete PhysPPI checkpoint")
     else:
         _require_equal(
             experiment["restart_checkpoint_path"],
-            CANONICAL_CHECKPOINT,
+            _canonical_checkpoint_path(),
             "cold-start checkpoint",
         )
     _validate_no_forbidden_losses(typed)

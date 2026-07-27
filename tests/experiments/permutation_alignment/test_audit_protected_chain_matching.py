@@ -1,4 +1,5 @@
 import json
+import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -205,6 +206,171 @@ def test_production_dataset_cache_isolated_by_paths(
             temporary.cleanup()
         audit._PRODUCTION_WORK_ROOTS.clear()
         audit._PRODUCTION_DATASETS.clear()
+
+
+def test_cleanup_production_cache_releases_only_target_before_temporary_root(
+    tmp_path: Path,
+) -> None:
+    first = audit.ProductionPaths(
+        qbiolip_root=tmp_path / "qbiolip-1",
+        afdb_root=tmp_path / "afdb-1",
+        formal_root=tmp_path / "formal-1",
+        components_cif=tmp_path / "components-1.cif",
+        reference_molecules=tmp_path / "reference-1",
+    )
+    second = audit.ProductionPaths(
+        qbiolip_root=tmp_path / "qbiolip-2",
+        afdb_root=tmp_path / "afdb-2",
+        formal_root=tmp_path / "formal-2",
+        components_cif=tmp_path / "components-2.cif",
+        reference_molecules=tmp_path / "reference-2",
+    )
+    cleanup_events: list[tuple[str, audit.ProductionPaths]] = []
+
+    class TemporaryRoot:
+        def __init__(self, paths: audit.ProductionPaths) -> None:
+            self.paths = paths
+
+        def cleanup(self) -> None:
+            assert all(
+                cached_paths != self.paths
+                for cached_paths, _dataset in audit._PRODUCTION_DATASETS
+            )
+            assert self.paths not in audit._PRODUCTION_WORK_ROOTS
+            cleanup_events.append(("cleanup", self.paths))
+
+    audit._PRODUCTION_DATASETS.clear()
+    audit._PRODUCTION_WORK_ROOTS.clear()
+    audit._PRODUCTION_DATASETS[(first, DatasetName.QBIOLIP)] = object()
+    audit._PRODUCTION_DATASETS[(first, DatasetName.AFDB)] = object()
+    retained_dataset = object()
+    audit._PRODUCTION_DATASETS[(second, DatasetName.QBIOLIP)] = retained_dataset
+    audit._PRODUCTION_WORK_ROOTS[first] = TemporaryRoot(first)
+    retained_root = TemporaryRoot(second)
+    audit._PRODUCTION_WORK_ROOTS[second] = retained_root
+    try:
+        audit.cleanup_production_cache(first)
+        audit.cleanup_production_cache(first)
+
+        assert cleanup_events == [("cleanup", first)]
+        assert {
+            (second, DatasetName.QBIOLIP): retained_dataset
+        } == audit._PRODUCTION_DATASETS
+        assert {second: retained_root} == audit._PRODUCTION_WORK_ROOTS
+    finally:
+        audit._PRODUCTION_DATASETS.clear()
+        audit._PRODUCTION_WORK_ROOTS.clear()
+
+
+def test_main_cleans_production_cache_when_audit_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup_calls = 0
+
+    class TemporaryRoot:
+        def cleanup(self) -> None:
+            nonlocal cleanup_calls
+            cleanup_calls += 1
+
+    def fail_audit(
+        _runtime_ledger: Path,
+        _output: Path,
+        evaluator: audit.MatchEvaluator,
+    ) -> tuple[audit.ProtectedMatchAuditRecord, ...]:
+        paths = evaluator.args[0]
+        audit._PRODUCTION_DATASETS[(paths, DatasetName.QBIOLIP)] = object()
+        audit._PRODUCTION_WORK_ROOTS[paths] = TemporaryRoot()
+        raise RuntimeError("fixture audit failure")
+
+    monkeypatch.setattr(audit, "run_protected_match_audit", fail_audit)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "audit-protected",
+            "--runtime-ledger",
+            str(tmp_path / "runtime.jsonl"),
+            "--output",
+            str(tmp_path / "audit.jsonl"),
+            "--qbiolip-root",
+            str(tmp_path / "qbiolip"),
+            "--afdb-root",
+            str(tmp_path / "afdb"),
+            "--formal-root",
+            str(tmp_path / "formal"),
+            "--components-cif",
+            str(tmp_path / "components.cif"),
+        ],
+    )
+    audit._PRODUCTION_DATASETS.clear()
+    audit._PRODUCTION_WORK_ROOTS.clear()
+    try:
+        with pytest.raises(RuntimeError, match="fixture audit failure"):
+            audit.main()
+
+        assert cleanup_calls == 1
+        assert audit._PRODUCTION_DATASETS == {}
+        assert audit._PRODUCTION_WORK_ROOTS == {}
+    finally:
+        audit._PRODUCTION_DATASETS.clear()
+        audit._PRODUCTION_WORK_ROOTS.clear()
+
+
+def test_main_with_custom_evaluator_does_not_clean_production_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = audit.ProductionPaths(
+        qbiolip_root=tmp_path / "qbiolip",
+        afdb_root=tmp_path / "afdb",
+        formal_root=tmp_path / "formal",
+        components_cif=tmp_path / "components.cif",
+        reference_molecules=tmp_path / "reference",
+    )
+
+    class TemporaryRoot:
+        cleanup_calls = 0
+
+        def cleanup(self) -> None:
+            self.cleanup_calls += 1
+
+    retained_dataset = object()
+    retained_root = TemporaryRoot()
+    audit._PRODUCTION_DATASETS.clear()
+    audit._PRODUCTION_WORK_ROOTS.clear()
+    audit._PRODUCTION_DATASETS[(paths, DatasetName.QBIOLIP)] = retained_dataset
+    audit._PRODUCTION_WORK_ROOTS[paths] = retained_root
+    monkeypatch.setattr(audit, "_load_evaluator", lambda _specification: object())
+    monkeypatch.setattr(
+        audit,
+        "run_protected_match_audit",
+        lambda _runtime_ledger, _output, _evaluator: (),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "audit-protected",
+            "--runtime-ledger",
+            str(tmp_path / "runtime.jsonl"),
+            "--output",
+            str(tmp_path / "audit.jsonl"),
+            "--evaluator",
+            "fixture:evaluate",
+        ],
+    )
+    try:
+        audit.main()
+
+        assert {
+            (paths, DatasetName.QBIOLIP): retained_dataset
+        } == audit._PRODUCTION_DATASETS
+        assert {paths: retained_root} == audit._PRODUCTION_WORK_ROOTS
+        assert retained_root.cleanup_calls == 0
+    finally:
+        audit._PRODUCTION_DATASETS.clear()
+        audit._PRODUCTION_WORK_ROOTS.clear()
 
 
 def test_custom_evaluator_does_not_require_production_paths() -> None:

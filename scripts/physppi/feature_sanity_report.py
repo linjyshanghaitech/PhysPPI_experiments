@@ -45,14 +45,7 @@ from openfold3.projects.of3_all_atom.physppi.model.feature_injection import (
     PHYS_PPI_KEYS,
 )
 
-_SNAPSHOT_DATASET_ROOTS = {
-    "qbiolip": Path(
-        os.environ.get(
-            "PHYSPPI_QBIOLIP_ROOT",
-            Path.home() / "PPI/Prior_out/training/Q-BioLiP-10k-new",
-        )
-    ),
-}
+_SNAPSHOT_DATASET_ENV = {"qbiolip": "PHYSPPI_QBIOLIP_ROOT"}
 _FORBIDDEN_MODEL_INPUT_KEYS = (
     ESM_FORBIDDEN_KEYS
     | LEGACY_PHYS_PPI_MODEL_INPUT_KEYS
@@ -177,8 +170,18 @@ def build_feature_snapshot(
     return report
 
 
+def _snapshot_dataset_root(dataset: str) -> Path:
+    environment_name = _SNAPSHOT_DATASET_ENV[dataset]
+    return Path(
+        os.environ.get(
+            environment_name,
+            Path.home() / "PPI/Prior_out/training/Q-BioLiP-10k-new",
+        )
+    )
+
+
 def _snapshot_reader(dataset: str):
-    return QBioLiP10kReader(_SNAPSHOT_DATASET_ROOTS[dataset])
+    return QBioLiP10kReader(_snapshot_dataset_root(dataset))
 
 
 def _render(report: dict) -> str:
@@ -196,7 +199,7 @@ def _write_or_print(report: dict, output: Path | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path)
-    parser.add_argument("--dataset", choices=sorted(_SNAPSHOT_DATASET_ROOTS))
+    parser.add_argument("--dataset", choices=sorted(_SNAPSHOT_DATASET_ENV))
     parser.add_argument("--sample-id")
     parser.add_argument("--epoch", type=int)
     parser.add_argument("--global-slots", type=int, nargs="+")

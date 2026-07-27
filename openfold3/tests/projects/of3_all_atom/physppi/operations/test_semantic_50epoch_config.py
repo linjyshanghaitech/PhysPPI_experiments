@@ -1,5 +1,6 @@
 import hashlib
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -10,10 +11,6 @@ from openfold3.core.data.framework.data_module import DataModuleConfig
 from openfold3.entry_points.validator import DataModuleArgs
 from openfold3.projects.of3_all_atom.project_entry import ModelUpdate, OF3ProjectEntry
 
-CANONICAL_CHECKPOINT = "/101045/jinyu/.openfold3/of3-p2-155k.pt"
-COMPONENTS_CIF = (
-    "/101045/jinyu/PhysPPI/openfold-3/output/physppi_msa_cache/components.cif"
-)
 LORA_GROUPS = [
     {
         "patterns": [r"^template_embedder\.linear_t$"],
@@ -34,6 +31,23 @@ LORA_GROUPS = [
         "max_trainable_lora_params": 131_968,
     },
 ]
+
+
+def _canonical_checkpoint() -> str:
+    return os.environ["OPENFOLD3_CHECKPOINT"]
+
+
+def _components_cif() -> str:
+    return os.environ["PHYSPPI_COMPONENTS_CIF"]
+
+
+@pytest.fixture(autouse=True)
+def _portable_production_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENFOLD3_CHECKPOINT", str(tmp_path / "canonical.pt"))
+    monkeypatch.setenv("PHYSPPI_COMPONENTS_CIF", str(tmp_path / "components.cif"))
 
 
 def _load_module():
@@ -192,8 +206,8 @@ def _baseline() -> dict[str, object]:
             }
         },
         "dataset_paths": {
-            "qbiolip10k": {"ccd_file": COMPONENTS_CIF},
-            "afdb10k": {"ccd_file": COMPONENTS_CIF},
+            "qbiolip10k": {"ccd_file": _components_cif()},
+            "afdb10k": {"ccd_file": _components_cif()},
         },
     }
 
@@ -303,7 +317,7 @@ def _assert_common(config: dict[str, object], manifest: Path) -> None:
             "confidence_loss_names": ["plddt", "pde", "pae"],
             "loss_weights": {"experimentally_resolved": 0.0, "pde": 1.0e-4},
         }
-        assert config["dataset_paths"][name]["ccd_file"] == COMPONENTS_CIF
+        assert config["dataset_paths"][name]["ccd_file"] == _components_cif()
     assert config["checkpoint_config"] == {
         "every_n_epochs": 1,
         "every_n_train_steps": None,
@@ -343,7 +357,7 @@ def test_builder_produces_exact_independent_smoke_and_formal(
     assert smoke["experiment_settings"] == {
         **smoke["experiment_settings"],
         "seed": 42,
-        "restart_checkpoint_path": CANONICAL_CHECKPOINT,
+        "restart_checkpoint_path": _canonical_checkpoint(),
         "preemption_safe_resume": False,
         "ckpt_load_settings": {
             "manual_checkpoint_loading": True,
@@ -354,8 +368,37 @@ def test_builder_produces_exact_independent_smoke_and_formal(
         },
     }
     assert formal["experiment_settings"]["restart_checkpoint_path"] == (
-        CANONICAL_CHECKPOINT
+        _canonical_checkpoint()
     )
+
+
+def test_builder_resolves_production_paths_at_call_time(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    manifest: tuple[Path, str],
+) -> None:
+    module = _load_module()
+    checkpoint = tmp_path / "runtime-canonical.pt"
+    components = tmp_path / "runtime-components.cif"
+    monkeypatch.setenv("OPENFOLD3_CHECKPOINT", str(checkpoint))
+    monkeypatch.setenv("PHYSPPI_COMPONENTS_CIF", str(components))
+    manifest_path, digest = manifest
+
+    smoke, formal = module.build_semantic_configs(
+        _baseline(),
+        str(manifest_path),
+        "v1",
+        manifest_sha256=digest,
+    )
+
+    for config in (smoke, formal):
+        assert config["experiment_settings"]["restart_checkpoint_path"] == str(
+            checkpoint
+        )
+        assert config["dataset_paths"] == {
+            "qbiolip10k": {"ccd_file": str(components)},
+            "afdb10k": {"ccd_file": str(components)},
+        }
 
 
 def test_builder_produces_native_recovery_not_manual_loading(
