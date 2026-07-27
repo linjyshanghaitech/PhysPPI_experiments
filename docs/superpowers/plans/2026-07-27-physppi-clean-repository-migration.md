@@ -148,14 +148,14 @@ git status --short
 **/__pycache__/
 
 # Runtime data and generated artifacts
-output/
-outputs/
-logs/
-runs/
-remote/
-scratch/
-state/
-work/
+/output/
+/outputs/
+/logs/
+/runs/
+/remote/
+/scratch/
+/state/
+/work/
 
 # Model artifacts and local configuration
 *.ckpt
@@ -244,7 +244,26 @@ find . -path ./.git -prune -o -type f \
 
 预期：没有输出。
 
-- [ ] **Step 4：验证包导入**
+- [ ] **Step 4：验证导入文件与源提交 blob 一致**
+
+除 `.gitignore` 和目标仓库新建文档外，逐文件比较源提交 blob：
+
+```bash
+SOURCE=/101045/jinyu/PhysPPI_jinyu/qinwc/openfold-3
+SHA=4c1c97d13f3fbda1184f003e9147f7b122c7c5a4
+while IFS= read -r path; do
+  case "$path" in
+    .gitignore|SOURCE_PROVENANCE.md|docs/superpowers/*) continue ;;
+  esac
+  source_oid=$(git -C "$SOURCE" rev-parse "$SHA:$path")
+  target_oid=$(git hash-object "$path")
+  test "$source_oid" = "$target_oid"
+done < <({ git ls-files; git ls-files --others --exclude-standard; } | sort -u)
+```
+
+预期：所有比较均通过，退出码为 0。
+
+- [ ] **Step 5：验证包导入**
 
 使用源仓库已有的 CPU 环境执行目标代码：
 
@@ -256,7 +275,7 @@ PYTHONPATH=/101045/jinyu/PhysPPI_jinyu/PhysPPI \
 
 预期：输出路径位于目标仓库的 `openfold3/__init__.py`。
 
-- [ ] **Step 5：运行排列对齐聚焦测试**
+- [ ] **Step 6：运行排列对齐聚焦测试**
 
 ```bash
 PYTHONPATH=/101045/jinyu/PhysPPI_jinyu/PhysPPI \
@@ -268,7 +287,7 @@ PYTHONPATH=/101045/jinyu/PhysPPI_jinyu/PhysPPI \
 
 预期：全部通过。
 
-- [ ] **Step 6：运行代表性仓库测试和 Ruff**
+- [ ] **Step 7：运行代表性仓库测试和 Ruff**
 
 ```bash
 PYTHONPATH=/101045/jinyu/PhysPPI_jinyu/PhysPPI \
@@ -281,8 +300,10 @@ PYTHONPATH=/101045/jinyu/PhysPPI_jinyu/PhysPPI \
   check openfold3 scripts
 ```
 
-预期：测试全部通过，Ruff 无错误。若发现源代码既有缺陷，记录失败且不在迁移提交中
-修改模型行为。
+预期：测试全部通过。Ruff 在
+`openfold3/tests/core/data/tools/test_rscb.py:19` 报告一个源提交中可复现的未使用
+`pytest` import（F401）；在 `SOURCE_PROVENANCE.md` 中记录该基线问题，不在迁移
+提交中修改模型行为。
 
 ## Task 5：提交并推送
 
@@ -294,11 +315,15 @@ PYTHONPATH=/101045/jinyu/PhysPPI_jinyu/PhysPPI \
 
 ```bash
 git add .
-git diff --cached --check
+git diff --cached --check -- \
+  .gitignore SOURCE_PROVENANCE.md docs/superpowers
 git status --short
 ```
 
-预期：没有 whitespace error；staged 内容不包含 denylist 路径。
+预期：本次手工编辑的文件没有 whitespace error；staged 内容不包含 denylist
+路径。完整导入内容不运行全量 `git diff --cached --check`，因为新仓库会将源提交中
+既有的文档和 CIF 尾随空格全部显示为新增行错误；这些文件改用逐 blob 来源一致性
+检查。
 
 - [ ] **Step 2：创建 clean baseline 提交**
 

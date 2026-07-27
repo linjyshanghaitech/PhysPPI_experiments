@@ -131,14 +131,14 @@
 **/__pycache__/
 
 # 运行数据和生成产物
-output/
-outputs/
-logs/
-runs/
-remote/
-scratch/
-state/
-work/
+/output/
+/outputs/
+/logs/
+/runs/
+/remote/
+/scratch/
+/state/
+/work/
 
 # 模型产物和本地配置
 *.ckpt

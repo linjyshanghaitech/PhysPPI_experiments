@@ -1,0 +1,7 @@
+model_update:
+  presets:
+    - predict
+  custom:
+    architecture:
+      physppi:
+        enabled: false

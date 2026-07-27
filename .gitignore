@@ -1,0 +1,47 @@
+.vscode/
+.idea/
+__pycache__/
+*.egg-info
+build
+dist
+.DS_Store
+
+# files from script downloads
+openfold3/resources/
+tests/test_data/sample_feats.pickle
+cutlass/
+
+# User-specific claude settings
+.claude/
+
+# User-specific pre-commit settings
+.pre-commit-config.yaml
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+# uv environments
+.venv/
+
+# Local environments and caches
+.pixi/
+.pytest_cache/
+.ruff_cache/
+**/__pycache__/
+
+# Local experiment outputs and credentials
+/output/
+/outputs/
+/logs/
+/runs/
+/remote/
+/scratch/
+/state/
+/work/
+*.ckpt
+*.pt
+*.pth
+*.log
+.env
+.env.*
