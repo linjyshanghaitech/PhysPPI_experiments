@@ -282,4 +282,48 @@ grep -rn "Jinyu Lin" openfold3/
 | 修复 commit | `01eb946` |
 | 分支 | `main` |
 | 已推送至 GitHub | ✅ 是（`origin/main` 已同步至 `01eb946`） |
-| 本文档 + 代码标注 | 本地修改中，待 commit + push |
+| 本文档 + 代码标注 | ✅ 已推送 |
+
+---
+
+## 为什么必须同时改两个文件？
+
+正式代码的修改只涉及两个文件：
+
+| # | 文件 | 角色 |
+|---|---|---|
+| ① | `structure.py` | **数据生产**：特征化阶段，决定哪些字段写入 features dict |
+| ② | `permutation_alignment.py` | **数据消费**：训练时对齐阶段，从 features dict 读取字段做对齐 |
+
+它们形成**生产→消费**的上下游关系，缺一不可：
+
+### 如果只改 ① 不改 ②
+
+```
+structure.py:  asym_id/entity_id/sym_id 写入 GT features ✅
+permutation_alignment.py:  没有任何代码读取这些字段 ❌
+                          对齐策略仍然是 protected → identity
+                          GT 有链标签，但被闲置
+```
+
+### 如果只改 ② 不改 ①
+
+```
+structure.py:  asym_id/entity_id/sym_id 只在 pred 侧有 ❌
+permutation_alignment.py:  token_identity 策略想读 gt_asym_id
+                           → 读到 None → asym_id 校验被跳过
+                           → token_index 直连仍可工作，但失去 chain 级安全网
+```
+
+### 同时改 ① + ②
+
+```
+structure.py:              asym_id/entity_id/sym_id → pred 和 GT 都有 ✅
+permutation_alignment.py:  token_identity 读到 gt_asym_id → 校验生效 ✅
+                           protected 读到 gt_mol_entity_id → 仍然可用 ✅
+                           回退链: token_identity → protected → identity ✅
+```
+
+**核心逻辑**：`token_index` 能做 1:1 映射的前提是两边的 token_index 确实一一对应，
+而 `asym_id` 的校验保证了映射没有跨越 chain 边界——这需要 GT 侧也有 `asym_id`。
+所以 ①（提供数据）和 ②（使用数据）必须一起改。
