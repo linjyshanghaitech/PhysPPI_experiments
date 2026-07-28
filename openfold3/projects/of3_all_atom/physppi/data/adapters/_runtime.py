@@ -1,3 +1,16 @@
+# =============================================================================
+# Modified by Jinyu Lin (linjyshanghaitech), ShanghaiTech University
+# Date: 2026-07-28
+# Project: PhysPPI — https://github.com/linjyshanghaitech/PhysPPI_experiments
+#
+# Modification summary:
+#   Integrated mesh_prior module: replaces build_surface_features() KNN with
+#   pre-computed KDTree-based per-residue mesh tensors ({case_id}_mesh.pt).
+#   Falls back to original KNN when .pt is missing.
+#
+#   See: experiments/mesh_prior/README.md for full context.
+# =============================================================================
+
 """Shared OF3 runtime adapter for canonical PhysPPI prior-complex data."""
 
 from __future__ import annotations
@@ -102,6 +115,153 @@ from openfold3.projects.of3_all_atom.physppi.features import (
     build_tm_features,
     restrict_tm_payload_to_chains,
 )
+
+# Mesh Prior (KDTree-based, Jinyu Lin, ShanghaiTech)
+# Replaces build_surface_features with pre-computed per-residue mesh tensors.
+# See: experiments/mesh_prior/README.md
+from experiments.mesh_prior.mesh_adapter import build_surface_from_precomputed
+from experiments.residue_prior.residue_adapter import (
+    build_contact_from_precomputed as _build_contact_from_pt,
+    build_interaction_from_precomputed as _build_interaction_from_pt,
+    build_membrane_target_from_precomputed as _build_membrane_target_from_pt,
+    build_tm_from_precomputed as _build_tm_from_pt,
+)
+
+_MESH_PT_DATASET_MAP = {
+    "afdb": "AFDB-10k-1",
+    "qbiolip": "Q-BioLiP-10k-new",
+}
+
+
+def _build_surface_mesh_prior(
+    adapter,
+    sample,
+    token_index,
+    transforms,
+    input_atom_array,
+):
+    """Build surface features from pre-computed mesh .pt, falling back to KNN.
+
+    PhysPPI modification (Jinyu Lin, ShanghaiTech):
+    Attempts to load a pre-computed KDTree-based mesh tensor from the
+    cli_v3 precomputed_mesh directory.  When the .pt is unavailable
+    (e.g. during screening / missing chunk), falls back silently to the
+    original build_surface_features().
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    dataset_dir = _MESH_PT_DATASET_MAP.get(adapter.name)
+    if dataset_dir is not None:
+        try:
+            # Derive chunk name from prior_pkl path:
+            #   .../chunk/chunkXXXX/prior_pkl/{case_id}.pkl
+            prior_pkl = sample.paths.prior_pkl
+            chunk_name = prior_pkl.parent.parent.name  # chunkXXXX
+            mesh_pt = (
+                prior_pkl.parent.parent.parent.parent.parent  # dataset root
+                / "precomputed_mesh" / "cli_v3" / dataset_dir
+                / chunk_name / f"{sample.sample_id}_mesh.pt"
+            )
+            if mesh_pt.exists():
+                return build_surface_from_precomputed(
+                    mesh_pt_path=mesh_pt,
+                    token_index=token_index,
+                    atom_array=input_atom_array,
+                    monomer_transforms=transforms,
+                    k=64,
+                )
+        except Exception:
+            logger.debug(
+                "mesh_prior unavailable for %s/%s; using KNN fallback",
+                dataset_dir, sample.sample_id, exc_info=True,
+            )
+    # Fallback to original KNN method
+    k = int(adapter.physppi.num_surface_neighbors)
+    return build_surface_features(
+        sample.mesh, token_index, transforms, k,
+        atom_array=input_atom_array,
+    )
+
+
+def _derive_pt_path(sample: PriorComplexSample, dataset_dir: str, pt_name: str) -> Path | None:
+    """Derive precomputed .pt path from the prior_pkl location.
+
+    PhysPPI modification (Jinyu Lin, ShanghaiTech):
+    Uses the same directory structure as mesh_prior so all .pt files
+    live alongside each other in precomputed_mesh/cli_v3/.
+    """
+    prior_pkl = sample.paths.prior_pkl
+    chunk_name = prior_pkl.parent.parent.name  # chunkXXXX
+    return (
+        prior_pkl.parent.parent.parent.parent.parent  # dataset root
+        / "precomputed_mesh" / "cli_v3" / dataset_dir
+        / chunk_name / f"{sample.sample_id}_{pt_name}"
+    )
+
+
+def _build_residue_priors(
+    adapter,
+    sample: PriorComplexSample,
+    token_index: dict[tuple[str, int], int],
+    cutoff: float,
+    atom_array,
+):
+    """Build contact/interaction/membrane features from precomputed .pt files.
+
+    PhysPPI modification (Jinyu Lin, ShanghaiTech):
+    Each prior is independently loaded from its .pt.  If a .pt is missing
+    or fails to load, that prior silently returns None so the caller can
+    fall back to the original builder.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    dataset_dir = _MESH_PT_DATASET_MAP.get(adapter.name)
+
+    contact = None
+    interaction = None
+    tm_mask = None
+    membrane = None
+
+    if dataset_dir is not None:
+        # --- interface residues ---
+        pt_path = _derive_pt_path(sample, dataset_dir, "interface_residues.pt")
+        if pt_path is not None and pt_path.exists():
+            try:
+                contact = _build_contact_from_pt(pt_path, token_index, cutoff)
+            except Exception:
+                logger.debug(
+                    "interface_residues.pt failed for %s; falling back", sample.sample_id,
+                    exc_info=True,
+                )
+
+        # --- interaction pairs ---
+        pt_path = _derive_pt_path(sample, dataset_dir, "interaction_pairs.pt")
+        if pt_path is not None and pt_path.exists():
+            try:
+                interaction = _build_interaction_from_pt(
+                    pt_path, token_index, atom_array=atom_array,
+                )
+            except Exception:
+                logger.debug(
+                    "interaction_pairs.pt failed for %s; falling back", sample.sample_id,
+                    exc_info=True,
+                )
+
+        # --- membrane relative location ---
+        pt_path = _derive_pt_path(sample, dataset_dir, "membrane_relative_location.pt")
+        if pt_path is not None and pt_path.exists():
+            try:
+                tm_mask = _build_tm_from_pt(pt_path, token_index)
+                membrane = _build_membrane_target_from_pt(pt_path)
+            except Exception:
+                logger.debug(
+                    "membrane_relative_location.pt failed for %s; falling back",
+                    sample.sample_id, exc_info=True,
+                )
+
+    return contact, interaction, tm_mask, membrane
+
+
 from openfold3.projects.of3_all_atom.physppi.model.interaction_auxiliary import (
     _build_pair_interaction_auxiliary,
 )
@@ -1540,30 +1700,41 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
     ) -> dict[str, torch.Tensor]:
         if n_tokens is None:
             n_tokens = len(token_index)
-        contact = build_contact_features(
-            sample.dmap,
-            token_index,
-            cutoff=self._select_contact_cutoff(rng),
+        # PhysPPI residue priors (Jinyu Lin, ShanghaiTech):
+        #   Prefer pre-computed .pt files for contact/interaction/membrane.
+        #   Each prior independently falls back to the original builder.
+        contact_cutoff = self._select_contact_cutoff(rng)
+        pt_contact, pt_interaction, pt_tm, pt_membrane = _build_residue_priors(
+            self, sample, token_index, contact_cutoff, atom_array,
         )
-        interaction = build_interaction_features(
-            sample.interactions,
-            token_index,
-            atom_array=atom_array,
-        )
+        if pt_contact is not None:
+            contact = pt_contact
+        else:
+            contact = build_contact_features(
+                sample.dmap, token_index, cutoff=contact_cutoff,
+            )
+        if pt_interaction is not None:
+            interaction = pt_interaction
+        else:
+            interaction = build_interaction_features(
+                sample.interactions, token_index, atom_array=atom_array,
+            )
         chains = set(str(chain) for chain in np.asarray(atom_array.chain_id))
         transforms = {
             chain: (np.eye(3, dtype=np.float32), np.zeros(3, dtype=np.float32))
             for chain in chains
         }
-        surface = build_surface_features(
-            sample.mesh,
-            token_index,
-            transforms,
-            int(self.physppi.num_surface_neighbors),
-            atom_array=input_atom_array,
+        # PhysPPI mesh prior (Jinyu Lin, ShanghaiTech):
+        #   Prefer pre-computed KDTree-based mesh-to-residue tensors.
+        #   Fall back to KNN-based build_surface_features when .pt is missing.
+        surface = _build_surface_mesh_prior(
+            self, sample, token_index, transforms, input_atom_array
         )
-        res_loc = sample.opm.get("res_loc", {}) if isinstance(sample.opm, dict) else {}
-        tm_mask = build_tm_features(res_loc, token_index)
+        if pt_tm is not None:
+            tm_mask = pt_tm
+        else:
+            res_loc = sample.opm.get("res_loc", {}) if isinstance(sample.opm, dict) else {}
+            tm_mask = build_tm_features(res_loc, token_index)
         padded_payloads = _pad_prior_payloads_to_token_count(
             {
                 "contact": np.asarray(contact["pair_mask"], dtype=bool),
@@ -1576,7 +1747,11 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
             },
             n_tokens,
         )
-        membrane = build_membrane_target(sample.opm, bool(tm_mask.any()))
+        membrane = (
+            pt_membrane
+            if pt_membrane is not None
+            else build_membrane_target(sample.opm, bool(tm_mask.any()))
+        )
         states[OptionalSlot.CONTACT] = replace(
             states[OptionalSlot.CONTACT], valid=bool(contact["valid"])
         )

@@ -1,0 +1,58 @@
+完整思路总结
+
+一、问题：v6~v32 反复崩溃
+
+fatal.md 记录了从 v6 到 v32 的反复失败，核心都指向同一条调用链：
+
+safe_multi_chain_permutation_alignment()
+  → single_batch_multi_chain_permutation_alignment()
+    → get_gt_anchor_mask()                          # 锚点 <4 resolved atoms → NaN
+    → find_greedy_optimal_mol_permutation()         # sym_token_index 不匹配 → crash
+    → get_permuted_gt_token_subset_index()          # entity_id 断言失败 → crash
+    → get_final_atom_permutation_index()            # scatter/gather 越界 → crash
+
+每次修一个症状，下一个就露出来。v25 加了 check_invalid_feature_dict 用随机坐标做 preflight 兜底，但随机坐标不能可靠模拟真实失败条件。
+
+二、根因：排列对齐在解决一个不存在的问题
+
+排列对齐（permutation_alignment.py ~1500 行）要做的事：在 homomer 中，判断 pred 的链 1 对应 GT 的链 A₁ 还是链 A₂。
+
+但这个问题从源头就不存在，因为：
+
+数据来源: PDB/CIF → NPZ (AtomArray 序列化)
+              ↓
+    pred atom_array 和 GT atom_array 来自同一个源
+              ↓
+    链的排序完全一致：pred 第 1 条链 = GT 第 1 条链
+              ↓
+    token_index + 一致的排序 → 1:1 匹配，零歧义
+
+排列对齐这个 1500 行的算法是 AF2-Multimer 时代的设计——那时链的标注不像现在这样贯穿全流程。AF3 时代有了 chain_id（NPZ 里有）和 token_index（featurize 时有），但排列对齐被照搬了过来，没有重新审视。
+
+三、排列对齐依赖的标签本身就是 bug 来源
+
+排列对齐用的 mol_entity_id、mol_sym_id、mol_sym_token_index 来自 mol_labels.py（~873 行）的 VF2++ 图同构算法。这个算法：
+
+- 在 bond parsing 异常时产出错误的对称性标签
+- 用 biotite 的 get_residue_starts() retokenize，在 sym_id 混合的 residue 上分裂出不同数量的 token
+- 导致 symmetric chains 在排列对齐时 token 数不一致 → torch.stack() crash
+
+排列对齐既是多余的，又依赖一个有 bug 的上游。双重冗余 + 双重脆弱。
+
+四、GT 侧缺少链标注是代码组织问题，不是技术约束
+
+featurize_structure_of3 把 asym_id、entity_id、sym_id 放在 if not is_gt: 分支里，导致 GT 拿不到链标注。但：
+
+- atom_array_gt.chain_id 在 NPZ 里有值——GT 侧也有链 ID
+- atom_array_gt.entity_id 在 NPZ 里也有值
+- 只是因为 is_gt=True 跳过了那几行提取代码
+
+这不是格式问题（PDB vs CIF 无关），不是存储问题（NPZ 里有 chain_id），纯粹是 if not is_gt: 的分支设计遗留。
+
+五、解决方案
+
+删掉排列对齐的链级部分。 具体来说：
+
+1. 不需要的（~2000 行）：assign_mol_permutation_ids 的图同构 + find_greedy_optimal_mol_permutation 的链排列 + get_gt_anchor_mask 的锚点选择 + get_anchor_transformations 的多锚点遍历
+2. 仍然需要的：Kabsch 坐标叠合 + 残基内原子排列（Asp 的两个 O 等，这确实是 token_index 解决不了的问题、也跟链排列无关）
+3. 可选的优化：把 asym_id/entity_id/sym_id 移到 is_gt 共享区域，让 GT 也有链标注——虽然不加也不影响正确性（naive_alignment 用 token_index 就能对上），但加了更清晰、更方便调试
