@@ -198,11 +198,6 @@ fc123ff refactor: isolate v1-v32 data audit experiment        ← 旧代码迁�
 ### 相对于官方 openfold3 的差异
 
 本项目的 `openfold3/` 核心库基于官方 openfold3 修改。
-官方版本可 clone 到以下路径做 diff 对比：
-
-```bash
-git clone https://github.com/aqlaboratory/openfold3.git /101045/jinyu/PhysPPI_jinyu/official
-```
 
 | 文件 | 修改者 | 差异概述 |
 |---|---|---|
@@ -264,10 +259,6 @@ git clone https://github.com/aqlaboratory/openfold3.git /101045/jinyu/PhysPPI_ji
 ```bash
 # 在项目根目录执行，列出所有 Jinyu Lin 的修改标注
 grep -rn "Jinyu Lin" openfold3/
-
-# 与官方版本做完整 diff
-diff -r /101045/jinyu/PhysPPI_jinyu/official/openfold3/ \
-        /101045/jinyu/PhysPPI_jinyu/PhysPPI/openfold3/
 ```
 
 ### 涉及的全部文件（绝对路径）
