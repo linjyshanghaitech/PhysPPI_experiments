@@ -11,6 +11,28 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# =============================================================================
+# Modified by Jinyu Lin (linjyshanghaitech), ShanghaiTech University
+# Project: PhysPPI — https://github.com/linjyshanghaitech/PhysPPI_experiments
+#
+# Modification summary:
+#   1. Added `chain_assignment="token_identity"` pathway — directly maps
+#      prediction tokens to GT tokens by stable source token_index, with
+#      optional asym_id consistency verification.  This is now the PREFERRED
+#      alignment strategy for PhysPPI training.
+#   2. Changed fallback chain in safe_multi_chain_permutation_alignment()
+#      from:  protected → identity
+#      to:    token_identity → protected → identity
+#   3. Added helper functions:
+#        - get_token_identity_gt_token_subset_index()
+#        - get_token_identity_atom_permutation_index()
+#        - _token_identity_atom_index_before_symmetry()
+#        - _alignment_token_center_atom_indices()
+#        - _get_valid_token_center_atoms()
+#
+#   See: experiments/permutation_alignment/README.md for full context.
+# =============================================================================
 
 # NIT: confusing that this needs to be transposed, while the rotation matrix in
 # Transformation doesn't
@@ -1021,7 +1043,16 @@ def get_token_identity_gt_token_subset_index(
     gt_asym_id: torch.Tensor | None = None,
     pred_asym_id: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Map prediction tokens to GT tokens by the stable source token index."""
+    """Map prediction tokens to GT tokens by the stable source token index.
+
+    PhysPPI addition (Jinyu Lin, ShanghaiTech):
+    This is the core of the token_identity alignment strategy.  It bypasses the
+    heavyweight Hungarian chain-matching algorithm and instead directly looks up
+    GT token rows by their shared token_index values.  When asym_id is available
+    on both sides, it additionally verifies that the mapping preserves chain
+    identity — a mismatch means token_index alone is insufficient and the caller
+    should fall back to protected chain matching.
+    """
     gt_tokens = [int(value) for value in gt_token_index.detach().cpu().tolist()]
     pred_tokens = [int(value) for value in pred_token_index.detach().cpu().tolist()]
     duplicate_gt_tokens = [
@@ -1905,6 +1936,10 @@ def single_batch_multi_chain_permutation_alignment(
     )
 
     # ASSIGNMENT STAGE
+    # PhysPPI modification (Jinyu Lin, ShanghaiTech):
+    #   token_identity is the preferred strategy for PhysPPI because prediction
+    #   and GT share the same token_index from the source structure.  It avoids
+    #   the combinatorial Hungarian matching that protected chain matching does.
     if chain_assignment == "token_identity":
         gt_token_index = gt_batch["token_index"][gt_token_pad_mask]
         pred_token_index = single_batch["token_index"][pred_token_pad_mask]
@@ -2379,6 +2414,11 @@ def safe_multi_chain_permutation_alignment(
             "invalid_token_center_index:" + ",".join(map(str, pdb_ids))
         )
 
+    # PhysPPI modification (Jinyu Lin, ShanghaiTech):
+    #   Fallback chain changed from:  protected → identity
+    #   to:  token_identity → protected → identity
+    #   token_identity is preferred for PhysPPI because pred and GT share
+    #   the same token_index; it is simpler, faster, and more reliable.
     try:
         new_gt_features = multi_chain_permutation_alignment(
             batch=per_sample_batch,

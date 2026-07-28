@@ -11,6 +11,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# =============================================================================
+# Modified by Jinyu Lin (linjyshanghaitech), ShanghaiTech University
+# Project: PhysPPI — https://github.com/linjyshanghaitech/PhysPPI_experiments
+#
+# Modification summary:
+#   Moved asym_id / entity_id / sym_id computation OUTSIDE the `if not is_gt:`
+#   block (lines 146–167) so that ground-truth features also receive chain
+#   identity labels.  The upstream openfold3 only computed these for the
+#   prediction side, which prevented training-time permutation alignment from
+#   using source chain ordering for verification.
+#
+#   See: experiments/permutation_alignment/README.md for full context.
+# =============================================================================
 
 """This module contains featurization pipelines for structural data."""
 
@@ -143,8 +157,10 @@ def featurize_structure_of3(
             atom_array.mol_sym_component_id[token_starts], dtype=torch.int32
         )
 
-    # Chain labels are present on both target and GT AtomArrays.  Keep them on the GT
-    # side too so training-time alignment can use the source ordering directly.
+    # PhysPPI modification (Jinyu Lin, ShanghaiTech):
+    #   Chain labels are present on both target and GT AtomArrays.  Keep them on the GT
+    #   side too so training-time alignment can use the source ordering directly.
+    #   UPSTREAM: these were computed inside `if not is_gt:` → GT side had no chain IDs.
     chain_ids_token = atom_array.chain_id[token_starts]
     unique_ids, renum_ids = np.unique(chain_ids_token, return_inverse=True)
     asym_id = torch.tensor(renum_ids + 1, dtype=torch.int32)
