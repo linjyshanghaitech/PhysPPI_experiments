@@ -1,3 +1,18 @@
+# =============================================================================
+# Modified by Jinyu Lin (linjyshanghaitech), ShanghaiTech University
+# Date: 2026-07-28
+# Project: PhysPPI — https://github.com/linjyshanghaitech/PhysPPI_experiments
+#
+# Modification summary:
+#   Moved asym_id / entity_id / sym_id computation OUTSIDE the `if not is_gt:`
+#   block (lines 146–167) so that ground-truth features also receive chain
+#   identity labels.  The upstream openfold3 only computed these for the
+#   prediction side, which prevented training-time permutation alignment from
+#   using source chain ordering for verification.
+#
+#   See: experiments/permutation_alignment/README.md for full context.
+# =============================================================================
+#
 # Copyright 2026 AlQuraishi Laboratory
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,20 +26,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
-# =============================================================================
-# Modified by Jinyu Lin (linjyshanghaitech), ShanghaiTech University
-# Project: PhysPPI — https://github.com/linjyshanghaitech/PhysPPI_experiments
-#
-# Modification summary:
-#   Moved asym_id / entity_id / sym_id computation OUTSIDE the `if not is_gt:`
-#   block (lines 146–167) so that ground-truth features also receive chain
-#   identity labels.  The upstream openfold3 only computed these for the
-#   prediction side, which prevented training-time permutation alignment from
-#   using source chain ordering for verification.
-#
-#   See: experiments/permutation_alignment/README.md for full context.
-# =============================================================================
 
 """This module contains featurization pipelines for structural data."""
 
