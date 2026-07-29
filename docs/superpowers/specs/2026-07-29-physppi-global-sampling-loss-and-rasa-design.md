@@ -42,10 +42,13 @@ per-sample-clipping paths call the same helper.
 
 ## Validation AtomArray Contract
 
-PhysPPI samples expose `atom_array_cropped` as batch `atom_array`. Its length
-must equal the atom axis of `atom_mask` and predicted coordinates. The full
-array remains internal to structure preprocessing and is not passed to RASA
-when token cropping is active.
+PhysPPI samples expose the exact `atom_array_cropped` object used to featurize
+`atom_mask` and ground-truth coordinates as batch `atom_array`. This preserves
+the same crop mask and atom order; the implementation must never approximate
+the result by slicing the first `N` atoms from the full array. Its length must
+equal the atom axis of `atom_mask`, ground-truth positions, and predicted
+coordinates. The full array remains internal to structure preprocessing and
+is not passed to RASA when token cropping is active.
 
 This does not reduce validation-set coverage: every ID in both validation
 manifest partitions is still enumerated. It only keeps each case's metadata
@@ -65,7 +68,8 @@ Regression tests cover:
 
 - one flat multinomial distribution over multiple datasets;
 - raw PT weight preservation and validation isolation;
-- cropped AtomArray propagation through collation;
+- identity-preserving cropped AtomArray propagation through collation, plus
+  matching `atom_mask` and ground-truth atom-axis lengths;
 - total-loss scaling in both training paths through a shared helper;
 - exact runtime YAML sampling and loss settings.
 

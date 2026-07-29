@@ -16,9 +16,14 @@
 - Modify: `openfold3/projects/of3_all_atom/physppi/data/adapters/_runtime.py`
 - Test: `openfold3/tests/projects/of3_all_atom/physppi/data/test_qbiolip10k_dataset.py`
 
-- [ ] Add a regression test whose full and cropped AtomArrays have different lengths and assert that collation preserves the cropped object.
+- [ ] Add a regression test whose full and cropped AtomArrays have different
+  identities, lengths, and atom order, then assert that collation preserves
+  the exact cropped object and that its length matches `atom_mask` and
+  ground-truth positions.
 - [ ] Run the focused test and verify that it fails because the full object is returned.
-- [ ] Change `build_sample_features()` to expose `sample_data["atom_array_cropped"]`.
+- [ ] Change `build_sample_features()` to expose the exact
+  `sample_data["atom_array_cropped"]` object and fail immediately if its atom
+  axis disagrees with `atom_mask` or ground-truth positions.
 - [ ] Run the focused test and verify that it passes.
 
 ### Task 2: Raw Global Datapoint Sampling
