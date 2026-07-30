@@ -20,6 +20,55 @@ def test_afdb_dataset_is_thin_shared_prior_complex_adapter():
     assert "build_sample_features" in AFDB10kDataset.__getitem__.__code__.co_names
 
 
+def test_afdb_dataset_does_not_limit_reader_index(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from openfold3.core.data.framework.single_datasets import afdb10k as module
+
+    reader_args = {}
+
+    def fake_reader(root, max_samples, *, index_cache_file):
+        reader_args.update(
+            root=root,
+            max_samples=max_samples,
+            index_cache_file=index_cache_file,
+        )
+        return object()
+
+    def fake_adapter_init(self, dataset_config):
+        self.dataset_cache = SimpleNamespace(release_connections=lambda: None)
+
+    monkeypatch.setattr(module, "AFDB10kReader", fake_reader)
+    monkeypatch.setattr(
+        PhysPPIPriorComplexDatasetAdapter,
+        "__init__",
+        fake_adapter_init,
+    )
+    monkeypatch.setattr(
+        AFDB10kDataset,
+        "create_datapoint_cache_from_reader",
+        lambda self, reader, physppi: None,
+    )
+
+    cache_path = tmp_path / "afdb-index.pkl"
+    config = SimpleNamespace(
+        physppi=SimpleNamespace(
+            root=tmp_path,
+            max_samples=256,
+            index_cache_file=cache_path,
+        )
+    )
+
+    dataset = AFDB10kDataset(config)
+
+    assert reader_args == {
+        "root": tmp_path,
+        "max_samples": None,
+        "index_cache_file": cache_path,
+    }
+    assert dataset.physppi.max_samples == 256
+
+
 def test_afdb_dataset_error_identifies_sample_id():
     from types import SimpleNamespace
 

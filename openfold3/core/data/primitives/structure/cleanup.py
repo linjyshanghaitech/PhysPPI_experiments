@@ -251,7 +251,7 @@ def select_highest_occupancy_residue_variants(atom_array: AtomArray) -> AtomArra
 
         if np.any(drop):
             keep[drop] = False
-            logger.warning(
+            logger.debug(
                 "Collapsed microheterogeneous residue chain=%s res_id=%s to %s "
                 "from variants=%s; dropped_atoms=%d",
                 chain_id,

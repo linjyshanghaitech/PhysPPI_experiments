@@ -79,7 +79,19 @@ class AuxiliaryHeadsAllAtom(nn.Module):
             **self.config["distogram"],
         )
 
-        self.pdockq = PDockQHead(
+        pdockq_head_module = self.config["pdockq"].get("head_module")
+        if pdockq_head_module is not None:
+            import importlib.util, sys
+            _spec = importlib.util.spec_from_file_location(
+                "_physppi_pdockq_head_v1", pdockq_head_module
+            )
+            _mod = importlib.util.module_from_spec(_spec)
+            sys.modules["_physppi_pdockq_head_v1"] = _mod
+            _spec.loader.exec_module(_mod)
+            _pdockq_cls: type[nn.Module] = _mod.PDockQHead
+        else:
+            _pdockq_cls = PDockQHead
+        self.pdockq = _pdockq_cls(
             c_s=self.config["pdockq"]["c_s"],
             c_z=self.config["pdockq"]["c_z"],
             no_bins=self.config["pdockq"].get("no_bins", 50),

@@ -1,0 +1,40 @@
+schema_version = 1
+
+[experiment]
+name = "physppi-training-smoke"
+run_name = "smoke-test-v1"
+module = "openfold3.run_openfold"
+args = [
+  "train",
+  "--runner-yaml", "experiments/_runtime/smoke_test.yaml",
+  "--seed", "42",
+  "--data-seed", "42",
+]
+
+[openfold]
+runner_yaml = "experiments/_runtime/smoke_test.yaml"
+
+[slurm]
+profile = "configs/slurm/single_gpu_debug.toml"
+job_name = "ppi-smoke"
+
+[artifacts]
+output_dir = "${PHYSPPI_OUTPUT_ROOT}/experiments/_runtime/smoke-test-v1"
+
+[environment]
+required = [
+  "PHYSPPI_OUTPUT_ROOT",
+]
+
+[validation]
+required_files = [
+  "experiments/_runtime/smoke_test.yaml",
+  "/101045/jinyu/.openfold3/of3-p2-155k.pt",
+  "/101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/split_manifest.json",
+  "/101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/sampling_weights.pt",
+  "/101045/jinyu/PhysPPI/assets/openfold3-physppi-20260724/ccd/components.cif",
+]
+required_directories = [
+  "/101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/Q-BioLiP-10k-new",
+  "/101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/AFDB-10k-1",
+]

@@ -34,6 +34,7 @@ from openfold3.entry_points.parameters import (
     get_default_checkpoint_dir,
 )
 from openfold3.entry_points.validator import (
+    CheckpointConfig,
     InferenceExperimentConfig,
     TrainingExperimentConfig,
 )
@@ -52,6 +53,19 @@ def default_ckpt_path():
 
 
 class TestOF3ModelCheckpointing:
+    def test_checkpoint_config_allows_step_checkpointing(self, tmp_path):
+        cfg = CheckpointConfig(
+            dirpath=str(tmp_path / "checkpoint"),
+            every_n_epochs=0,
+            every_n_train_steps=50,
+            save_on_train_epoch_end=False,
+        )
+
+        assert cfg.dirpath == str(tmp_path / "checkpoint")
+        assert cfg.every_n_epochs == 0
+        assert cfg.every_n_train_steps == 50
+        assert cfg.save_on_train_epoch_end is False
+
     def test_make_model_ckpt(
         self,
         tmp_path,

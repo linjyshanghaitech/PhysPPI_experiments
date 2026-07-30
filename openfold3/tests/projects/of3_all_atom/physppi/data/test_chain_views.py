@@ -18,6 +18,7 @@ from openfold3.projects.of3_all_atom.physppi.data.priors.schema import (
     PriorSamplePaths,
     iter_chain_pair_distances,
 )
+from openfold3.projects.of3_all_atom.physppi.features import PhysPPIDataError
 
 
 def test_resource_view_trigger_is_exact() -> None:
@@ -201,6 +202,109 @@ def test_connected_view_is_two_to_four_chains_and_replays() -> None:
     assert first.matcher_result == "pending"
 
 
+def test_retained_view_prefers_complete_four_chain_candidate() -> None:
+    graph = {
+        "A": {"B"},
+        "B": {"A", "C"},
+        "C": {"B", "D"},
+        "D": {"C"},
+    }
+
+    view = chain_views.sample_retained_chain_view(
+        graph,
+        np.random.default_rng(1),
+        "token_budget",
+        chain_lengths={"A": 100, "B": 120, "C": 130, "D": 140},
+    )
+
+    assert view.source_chain_ids == ("A", "B", "C", "D")
+    assert view.target_chain_count == 4
+    assert view.component_chain_ids == ("A", "B", "C", "D")
+    assert view.seed_edge is not None
+
+
+def test_retained_view_rejects_oversized_four_and_prefers_valid_three() -> None:
+    graph = {
+        "A": {"B"},
+        "B": {"A", "C"},
+        "C": {"B", "D"},
+        "D": {"C"},
+    }
+
+    view = chain_views.sample_retained_chain_view(
+        graph,
+        np.random.default_rng(3),
+        "token_budget",
+        chain_lengths={"A": 250, "B": 250, "C": 250, "D": 250},
+    )
+
+    assert len(view.source_chain_ids) == 3
+    assert _induced_subgraph_is_connected(graph, view.source_chain_ids)
+    assert sum({"A": 250, "B": 250, "C": 250, "D": 250}[chain] for chain in view.source_chain_ids) <= 768
+
+
+def test_retained_view_uses_pair_when_no_valid_three_or_four() -> None:
+    graph = {
+        "A": {"B"},
+        "B": {"A", "C"},
+        "C": {"B"},
+    }
+
+    view = chain_views.sample_retained_chain_view(
+        graph,
+        np.random.default_rng(4),
+        "token_budget",
+        chain_lengths={"A": 500, "B": 500, "C": 500},
+    )
+
+    assert len(view.source_chain_ids) == 2
+    assert _induced_subgraph_is_connected(graph, view.source_chain_ids)
+
+
+def test_retained_view_raises_without_connected_pair() -> None:
+    graph = {
+        "A": set(),
+        "B": set(),
+        "C": set(),
+        "D": set(),
+        "E": set(),
+    }
+
+    with pytest.raises(ValueError, match="connected dmap pair"):
+        chain_views.sample_retained_chain_view(
+            graph,
+            np.random.default_rng(5),
+            "token_budget",
+            chain_lengths={chain: 100 for chain in graph},
+        )
+
+
+def test_retained_view_candidate_cap_is_deterministic() -> None:
+    graph = {
+        chain: {other for other in "ABCDEFG" if other != chain}
+        for chain in "ABCDEFG"
+    }
+    chain_lengths = {chain: 10 for chain in graph}
+
+    first = chain_views.sample_retained_chain_view(
+        graph,
+        np.random.default_rng(6),
+        "token_budget",
+        chain_lengths=chain_lengths,
+        candidate_cap=5,
+    )
+    replay = chain_views.sample_retained_chain_view(
+        graph,
+        np.random.default_rng(6),
+        "token_budget",
+        chain_lengths=chain_lengths,
+        candidate_cap=5,
+    )
+
+    assert first == replay
+    assert len(first.source_chain_ids) == 4
+
+
 def test_sampling_is_independent_of_graph_insertion_order() -> None:
     ordered = {
         "A": {"B", "C"},
@@ -246,20 +350,19 @@ def test_edge_size_and_frontier_draws_use_complete_sorted_candidate_lists() -> N
         "B": {"C", "A"},
         "A": {"B"},
     }
-    rng = _ScriptedRNG([1, 4, 0, 0])
 
     view = chain_views.sample_retained_chain_view(
         graph,
-        rng,
+        np.random.default_rng(7),
         "token_budget",
+        chain_lengths={chain: 100 for chain in graph},
     )
 
-    assert view.seed_edge == ("B", "C")
     assert view.source_chain_ids == ("A", "B", "C", "D")
-    assert rng.bounds == [(0, 3), (2, 5), (0, 2), (0, 1)]
+    assert view.seed_edge in {("A", "B"), ("B", "C"), ("C", "D")}
 
 
-def test_isolated_chains_use_deterministic_first_four_fallback() -> None:
+def test_isolated_chains_raise_instead_of_first_four_fallback() -> None:
     graph = {
         "E": set(),
         "D": set(),
@@ -268,16 +371,11 @@ def test_isolated_chains_use_deterministic_first_four_fallback() -> None:
         "A": set(),
     }
 
-    view = chain_views.sample_retained_chain_view(
-        graph,
-        np.random.default_rng(3),
-        "token_budget",
-        parent_sample_id="parent",
-        occurrence_seed=3,
-    )
-
-    assert view.source_chain_ids == ("A", "B", "C", "D")
-    assert view.component_chain_ids == ("A", "B", "C", "D")
-    assert view.seed_edge is None
-    assert view.target_chain_count == 4
-    assert view.original_chain_ids == ("A", "B", "C", "D", "E")
+    with pytest.raises(PhysPPIDataError, match="missing_connected_dmap_pair"):
+        chain_views.sample_retained_chain_view(
+            graph,
+            np.random.default_rng(3),
+            "token_budget",
+            parent_sample_id="parent",
+            occurrence_seed=3,
+        )

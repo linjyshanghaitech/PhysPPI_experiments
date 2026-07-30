@@ -76,6 +76,60 @@ def _take_sample_dim(x, s: int):
     return x
 
 
+def _pdb_atom_metadata(line: str) -> dict[str, object] | None:
+    if not line.startswith(("ATOM  ", "HETATM")):
+        return None
+    try:
+        residue_id = int(line[22:26])
+        serial = int(line[6:11])
+    except ValueError:
+        return None
+    return {
+        "serial": serial,
+        "res_name": line[17:20],
+        "chain_id": line[21],
+        "residue_id": residue_id,
+        "residue_field": line[22:26],
+        "ins_code": line[26],
+    }
+
+
+def _format_ter_record(previous_atom: dict[str, object]) -> str:
+    serial = int(previous_atom["serial"]) + 1
+    res_name = str(previous_atom["res_name"])
+    chain_id = str(previous_atom["chain_id"])
+    residue_field = str(previous_atom["residue_field"])
+    ins_code = str(previous_atom["ins_code"])
+    return f"TER   {serial:5d}      {res_name} {chain_id}{residue_field}{ins_code}\n"
+
+
+def _insert_pdb_ter_records_at_residue_gaps(output_file: Path) -> None:
+    lines = output_file.read_text().splitlines(keepends=True)
+    rewritten: list[str] = []
+    previous_atom: dict[str, object] | None = None
+    previous_was_ter = False
+
+    for line in lines:
+        current_atom = _pdb_atom_metadata(line)
+        if current_atom is not None:
+            if (
+                previous_atom is not None
+                and not previous_was_ter
+                and current_atom["chain_id"] == previous_atom["chain_id"]
+                and int(current_atom["residue_id"])
+                > int(previous_atom["residue_id"]) + 1
+            ):
+                rewritten.append(_format_ter_record(previous_atom))
+            rewritten.append(line)
+            previous_atom = current_atom
+            previous_was_ter = False
+            continue
+        rewritten.append(line)
+        previous_was_ter = line.startswith("TER")
+
+    output_file.write_text("".join(rewritten))
+
+
 class OF3OutputWriter(BasePredictionWriter):
     """Callback for writing AF3 predicted structure and confidence outputs"""
 
@@ -129,6 +183,8 @@ class OF3OutputWriter(BasePredictionWriter):
             include_bonds=True,
             make_ost_compatible=make_ost_compatible,
         )
+        if output_file.suffix == ".pdb":
+            _insert_pdb_ter_records_at_residue_gaps(output_file)
 
     def get_pae_confidence_scores(self, confidence_scores, atom_array):
         pae_confidence_scores = {}

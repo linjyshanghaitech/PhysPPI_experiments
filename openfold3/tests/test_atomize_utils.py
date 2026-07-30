@@ -23,12 +23,28 @@ from openfold3.core.data.primitives.featurization.structure import (
 )
 from openfold3.core.utils.atomize_utils import (
     aggregate_atom_feat_to_tokens,
+    aggregate_atom_feat_to_tokens_nd,
     broadcast_token_feat_to_atoms,
     get_token_atom_index_offset,
     get_token_center_atoms,
     get_token_frame_atoms,
     get_token_representative_atoms,
 )
+
+
+def test_aggregate_atom_feat_to_tokens_nd_rejects_out_of_range_token_indices():
+    atom_feat = torch.ones(2)
+    atom_to_token_index = torch.tensor([0, 2])
+    token_mask = torch.ones(2, dtype=torch.bool)
+
+    with pytest.raises(ValueError, match="atom_to_token_index_list\\[0\\].*outside"):
+        aggregate_atom_feat_to_tokens_nd(
+            atom_feat,
+            atom_dims=[0],
+            atom_to_token_index_list=[atom_to_token_index],
+            token_sizes=[2],
+            token_masks=[token_mask],
+        )
 
 
 def example1():

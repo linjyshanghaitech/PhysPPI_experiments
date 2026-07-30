@@ -119,6 +119,39 @@ class TestPredictionWriter:
         parsed_coords = parsed_structure.coord[0]
         np.testing.assert_array_equal(parsed_coords, new_coords, strict=False)
 
+    def test_pdb_output_inserts_ter_at_residue_gaps(self, tmp_path):
+        atom_array = structure.AtomArray(3)
+        atom_array.coord = np.zeros((3, 3), dtype=float)
+        atom_array.chain_id = np.asarray(["A", "A", "A"])
+        atom_array.res_id = np.asarray([1, 2, 10])
+        atom_array.res_name = np.asarray(["ALA", "GLY", "SER"])
+        atom_array.atom_name = np.asarray(["CA", "CA", "CA"])
+        atom_array.element = np.asarray(["C", "C", "C"])
+        atom_array.entity_id = np.asarray(["A", "A", "A"])
+        atom_array.molecule_type_id = np.asarray(["0", "0", "0"])
+        atom_array.pdbx_formal_charge = np.asarray(["?", "?", "?"])
+
+        output_file = tmp_path / "gap.pdb"
+        OF3OutputWriter.write_structure_prediction(
+            atom_array=atom_array,
+            predicted_coords=np.zeros((3, 3), dtype=float),
+            plddt=np.ones(3, dtype=float),
+            output_file=output_file,
+            make_ost_compatible=False,
+        )
+
+        records = [
+            (line[:6].strip(), line[21].strip(), line[22:26].strip())
+            for line in output_file.read_text().splitlines()
+            if line.startswith(("ATOM  ", "HETATM", "TER"))
+        ]
+        assert records == [
+            ("ATOM", "A", "1"),
+            ("ATOM", "A", "2"),
+            ("TER", "A", "2"),
+            ("ATOM", "A", "10"),
+        ]
+
     def _load_full_confidence_scores(self, output_file_path):
         output_fmt = output_file_path.suffix.lstrip(".")
         match output_fmt:

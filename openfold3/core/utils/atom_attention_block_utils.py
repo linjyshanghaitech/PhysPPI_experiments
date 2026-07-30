@@ -188,6 +188,7 @@ def convert_single_rep_to_blocks(
     n_query: int,
     n_key: int,
     atom_mask: torch.Tensor,
+    atom_crop_segment_id: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     """
     Convert single atom representation to q/k blocks for attention.
@@ -202,6 +203,9 @@ def convert_single_rep_to_blocks(
             Number of keys (block width)
         atom_mask:
             [*, N_atom] Mask for token or atom-level embedding
+        atom_crop_segment_id:
+            Optional [*, N_atom] contiguous crop segment IDs. Pair masks are limited
+            to atoms in the same nonzero segment when provided.
 
     Returns:
         ql_query:
@@ -296,6 +300,39 @@ def convert_single_rep_to_blocks(
         key_block_idxs=key_block_idxs,
         invalid_mask=invalid_mask,
     )
+    if atom_crop_segment_id is not None:
+        atom_crop_segment_id = atom_crop_segment_id.to(device=ql.device).expand(
+            *batch_dims, -1
+        )
+        segment_n_atom = atom_crop_segment_id.shape[-1]
+        if segment_n_atom < n_atom:
+            atom_crop_segment_id = torch.nn.functional.pad(
+                atom_crop_segment_id, (0, n_atom - segment_n_atom), value=0
+            )
+        elif segment_n_atom > n_atom:
+            atom_crop_segment_id = atom_crop_segment_id[..., :n_atom]
+
+        segment_query = torch.nn.functional.pad(
+            atom_crop_segment_id, (0, pad_len_right_q), value=0
+        )
+        segment_query = segment_query.reshape(
+            (*batch_dims, num_blocks, n_query)
+        )
+
+        segment_flat = atom_crop_segment_id.reshape(flat_batch_size, n_atom)
+        segment_key_flat = torch.gather(
+            segment_flat,
+            1,
+            key_block_idxs.reshape(flat_batch_size, num_blocks * n_key).long(),
+        )
+        segment_key_flat.masked_fill_(
+            invalid_mask.reshape(flat_batch_size, num_blocks * n_key), 0
+        )
+        segment_key = segment_key_flat.reshape((*batch_dims, num_blocks, n_key))
+        same_segment = (
+            segment_query.unsqueeze(-1) == segment_key.unsqueeze(-2)
+        ) & (segment_query.unsqueeze(-1) > 0)
+        atom_pair_mask = atom_pair_mask * same_segment.to(dtype=atom_pair_mask.dtype)
 
     return ql_query, ql_key, atom_pair_mask
 

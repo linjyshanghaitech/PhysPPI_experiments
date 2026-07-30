@@ -55,6 +55,38 @@ from openfold3.core.data.resources.residues import (
 logger = logging.getLogger(__name__)
 
 
+def create_crop_segment_id(atom_array: AtomArray, token_starts: np.ndarray) -> torch.Tensor:
+    """Assign contiguous cropped segments while preserving original chain labels."""
+
+    if len(token_starts) == 0:
+        return torch.empty(0, dtype=torch.int32)
+
+    chain_ids = np.asarray(atom_array.chain_id[token_starts]).astype(str)
+    residue_ids = np.asarray(atom_array.res_id[token_starts], dtype=np.int64)
+    segment_ids = np.zeros(len(token_starts), dtype=np.int32)
+    current_segment = 1
+    segment_ids[0] = current_segment
+    previous_chain = chain_ids[0]
+    previous_residue = int(residue_ids[0])
+
+    for index in range(1, len(token_starts)):
+        chain_id = chain_ids[index]
+        residue_id = int(residue_ids[index])
+        if (
+            chain_id != previous_chain
+            or (
+                residue_id != previous_residue
+                and residue_id != previous_residue + 1
+            )
+        ):
+            current_segment += 1
+        segment_ids[index] = current_segment
+        previous_chain = chain_id
+        previous_residue = residue_id
+
+    return torch.tensor(segment_ids, dtype=torch.int32)
+
+
 def featurize_structure_of3(
     atom_array: AtomArray,
     n_tokens: int,
@@ -188,6 +220,10 @@ def featurize_structure_of3(
         # Indexing
         features["residue_index"] = torch.tensor(
             atom_array.res_id[token_starts], dtype=torch.int32
+        )
+        features["crop_segment_id"] = create_crop_segment_id(
+            atom_array,
+            token_starts,
         )
 
         # Bonds

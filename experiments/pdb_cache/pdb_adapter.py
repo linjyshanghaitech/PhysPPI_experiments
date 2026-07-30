@@ -535,7 +535,10 @@ def derive_cache_dir(
         return None
     try:
         chunk_name = prior_pkl.parent.parent.name  # chunkXXXX
-        dataset_root = prior_pkl.parent.parent.parent.parent.parent
-        return dataset_root / cache_root_name / dataset_dir / chunk_name
+        # PhysPPI modification (Jinyu Lin, ShanghaiTech):
+        #   precomputed_mesh/cli_v3 is a sibling of training/ under
+        #   Prior_out/.  Walk up 6 levels from the .pkl file.
+        prior_out = prior_pkl.parent.parent.parent.parent.parent.parent
+        return prior_out / cache_root_name / dataset_dir / chunk_name
     except Exception:
         return None

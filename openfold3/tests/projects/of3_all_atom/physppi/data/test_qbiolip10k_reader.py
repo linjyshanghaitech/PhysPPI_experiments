@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 from openfold3.projects.of3_all_atom.physppi.data.readers.qbiolip10k import (
     QBioLiP10kReader,
@@ -30,6 +31,36 @@ def _write_case(
     with path.open("wb") as handle:
         pickle.dump({sample_id: payload}, handle)
     return path
+
+
+def _write_precomputed_case(
+    root: Path,
+    sample_id: str,
+    chains: tuple[str, ...] = ("A", "B"),
+) -> Path:
+    chunk = root / "chunk0001"
+    chunk.mkdir(parents=True)
+    torch.save({"coord": torch.zeros((1, 3))}, chunk / f"{sample_id}_gt.pt")
+    torch.save(
+        {
+            chain_id: {
+                "full_seq_1aa": "A",
+                "full_seq_3aa": ["ALA"],
+                "resseq_to_sequence_index": {1: 0},
+                "mask": [True],
+                "msa_eligible": True,
+            }
+            for chain_id in chains
+        },
+        chunk / f"{sample_id}_seq.pt",
+    )
+    torch.save(
+        {"dmap": {"A|B": torch.tensor([[1, 1, 7.5]], dtype=torch.float32)}},
+        chunk / f"{sample_id}_interface_residues.pt",
+    )
+    for chain_id in chains:
+        torch.save({"coord": torch.zeros((1, 3))}, chunk / f"{sample_id}_{chain_id}_monomer.pt")
+    return chunk
 
 
 def test_reads_canonical_qbiolip_schema(tmp_path: Path) -> None:
@@ -70,6 +101,29 @@ def test_reads_canonical_qbiolip_schema(tmp_path: Path) -> None:
         "A": tmp_path / "chunk/chunk0001/bb_input/1abc_1_A.pdb"
     }
     assert sample.paths.main_msa_query_only is True
+
+
+def test_reads_qbiolip_precomputed_root_without_prior_pkl(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openfold3.projects.of3_all_atom.physppi.data.readers import qbiolip10k
+
+    sample_id = "precomputed_case"
+    _write_precomputed_case(tmp_path, sample_id)
+
+    monkeypatch.setattr(
+        qbiolip10k,
+        "read_prior_pkl",
+        lambda *args, **kwargs: pytest.fail("precomputed reader must not read prior pkl"),
+    )
+
+    sample = QBioLiP10kReader(tmp_path).read(sample_id)
+
+    assert sample.sample_id == sample_id
+    assert sample.dmap == {"A|B": ((1, 1, 7.5),)}
+    assert sample.chain_sequences == {"A": "A", "B": "A"}
+    assert sample.paths.gt_pdb == tmp_path / "chunk0001" / f"{sample_id}_gt.pt"
 
 
 def test_reads_signed_pdb_resseq_charge_nan_and_opm_none(

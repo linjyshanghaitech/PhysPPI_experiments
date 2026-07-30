@@ -30,7 +30,7 @@ from openfold3.core.data.resources.residues import MoleculeType
 
 # Canonical PhysPPI mesh neighborhood size.  Keep this in the shared component
 # module so readers, dataset configs, and tests do not silently drift apart.
-PHYSPPI_SURFACE_NEIGHBORS = 128
+PHYSPPI_SURFACE_NEIGHBORS = 64
 
 
 class MSASettings(BaseModel):

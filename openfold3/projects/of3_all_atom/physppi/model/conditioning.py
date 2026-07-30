@@ -35,7 +35,7 @@ class OptionalPriorOutput(NamedTuple):
 class OptionalPriorConditioner(nn.Module):
     """Apply canonical optional priors exactly once at input embedding time."""
 
-    def __init__(self, c_s: int, c_z: int, num_interaction_types: int = 7) -> None:
+    def __init__(self, c_s: int, c_z: int, num_interaction_types: int = 5) -> None:
         super().__init__()
         self.contact = ContactPairEncoder(c_z=c_z)
         self.interaction = InteractionPairEncoder(

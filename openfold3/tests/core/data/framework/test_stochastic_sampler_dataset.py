@@ -124,6 +124,44 @@ def test_default_mode_matches_explicit_false() -> None:
     assert implicit == explicit
 
 
+def test_global_datapoint_mode_uses_one_flat_multinomial_call(monkeypatch) -> None:
+    qbiolip = _Dataset("qbiolip", 2)
+    afdb = _Dataset("afdb", 2)
+    qbiolip.datapoint_cache["datapoint_probabilities"] = [1.0, 2.0]
+    afdb.datapoint_cache["datapoint_probabilities"] = [3.0, 4.0]
+    composite = SamplerDataset(datasets=[qbiolip, afdb], epoch_len=4)
+    calls = []
+
+    def fake_multinomial(input, num_samples, replacement, generator):
+        calls.append(input.clone())
+        assert num_samples == 4
+        assert replacement is True
+        return torch.tensor([0, 1, 2, 3])
+
+    monkeypatch.setattr(torch, "multinomial", fake_multinomial)
+    sampler = OF3DistributedSampler(
+        dataset=composite,
+        dataset_probabilities=[1.0, 0.0],
+        next_dataset_indices={},
+        epoch_len=4,
+        num_replicas=1,
+        rank=0,
+        seed=42,
+        global_datapoint_sampling=True,
+    )
+
+    occurrences = list(sampler)
+
+    assert len(calls) == 1
+    assert calls[0].tolist() == [1.0, 2.0, 3.0, 4.0]
+    assert [(row.dataset_idx, row.datapoint_idx) for row in occurrences] == [
+        (0, 0),
+        (0, 1),
+        (1, 0),
+        (1, 1),
+    ]
+
+
 def test_distinct_mode_requires_complete_world_size_groups() -> None:
     datasets = [_Dataset("qbiolip", 16), _Dataset("afdb", 16)]
     composite = SamplerDataset(datasets=datasets, epoch_len=65)

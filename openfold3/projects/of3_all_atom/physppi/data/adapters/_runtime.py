@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from collections import Counter
@@ -119,7 +120,15 @@ from openfold3.projects.of3_all_atom.physppi.features import (
 # Mesh Prior (KDTree-based, Jinyu Lin, ShanghaiTech)
 # Replaces build_surface_features with pre-computed per-residue mesh tensors.
 # See: experiments/mesh_prior/README.md
+import torch as _torch
+
 from experiments.mesh_prior.mesh_adapter import build_surface_from_precomputed
+# PDB cache (Jinyu Lin, ShanghaiTech)
+# Replaces on-the-fly PDB parsing + atom canonicalization with
+# torch.load() from precomputed AtomArray .pt files.
+from experiments.pdb_cache.pdb_adapter import (
+    load_atomarray_from_pt as _load_atomarray_from_pt,
+)
 from experiments.residue_prior.residue_adapter import (
     build_contact_from_precomputed as _build_contact_from_pt,
     build_interaction_from_precomputed as _build_interaction_from_pt,
@@ -127,10 +136,96 @@ from experiments.residue_prior.residue_adapter import (
     build_tm_from_precomputed as _build_tm_from_pt,
 )
 
-_MESH_PT_DATASET_MAP = {
-    "afdb": "AFDB-10k-1",
-    "qbiolip": "Q-BioLiP-10k-new",
-}
+
+def _using_precomputed_root(adapter) -> bool:
+    try:
+        root = Path(adapter.physppi.root)
+    except Exception:
+        return False
+    return root.parent.name == "cli_v3" and root.parent.parent.name == "precomputed_mesh"
+
+# Precomputed .pt directory layout (Jinyu Lin, ShanghaiTech):
+#   {physppi.root} may be either the old source tree
+#     .../Prior_out/training/{dataset}/
+#   or the strict precomputed tree
+#     .../Prior_out/precomputed_mesh/cli_v3/{dataset}/
+#   Precomputed dir = .../precomputed_mesh/cli_v3/{dataset}/{chunk}/
+
+
+def _precomputed_dir(
+    adapter,
+    sample: PriorComplexSample,
+) -> Path | None:
+    """Return the precomputed .pt directory for *sample*.
+
+    PhysPPI modification (Jinyu Lin, ShanghaiTech):
+    Derived from ``physppi.root`` config and GT PDB path — NOT from the
+    legacy ``prior_pkl`` path.  All precomputed data (mesh, residue, MSA,
+    PDB cache) live under a single directory tree keyed by dataset name
+    and chunk name.
+    """
+    try:
+        root = Path(adapter.physppi.root)
+        dataset_dir = root.name  # e.g. "Q-BioLiP-10k-new"
+        if root.parent.name == "cli_v3" and root.parent.parent.name == "precomputed_mesh":
+            precomputed_root = root
+            chunk_name = sample.paths.gt_pdb.parent.name
+        else:
+            precomputed_root = root.parent.parent / "precomputed_mesh" / "cli_v3" / dataset_dir
+            chunk_name = sample.paths.gt_pdb.parent.parent.name
+        return precomputed_root / chunk_name
+    except Exception:
+        return None
+
+
+def _derive_pt_path(
+    adapter,
+    sample: PriorComplexSample,
+    pt_name: str,
+) -> Path | None:
+    """Derive a precomputed .pt file path from config, not from prior_pkl."""
+    pt_dir = _precomputed_dir(adapter, sample)
+    if pt_dir is None:
+        return None
+    return pt_dir / f"{sample.sample_id}_{pt_name}"
+
+
+def _source_training_gt_pdb_path(sample: PriorComplexSample) -> Path | None:
+    """Return the original training GT PDB for validation artifact export."""
+
+    sample_paths = getattr(sample, "paths", None)
+    gt_pdb = getattr(sample_paths, "gt_pdb", None)
+    if gt_pdb is None:
+        return None
+
+    gt_path = Path(gt_pdb)
+    if gt_path.suffix.lower() == ".pdb" and gt_path.is_file():
+        return gt_path
+
+    if gt_path.suffix.lower() != ".pt" or gt_path.parent.parent.parent.name != "cli_v3":
+        return None
+
+    dataset_dir = gt_path.parent.parent.name
+    chunk_name = gt_path.parent.name
+    prior_out_root = gt_path.parents[4]
+    training_roots = []
+    env_root = os.environ.get("PHYSPPI_TRAINING_ROOT")
+    if env_root:
+        training_roots.append(Path(env_root))
+    training_roots.append(prior_out_root / "training")
+
+    for training_root in training_roots:
+        source_path = (
+            training_root
+            / dataset_dir
+            / "chunk"
+            / chunk_name
+            / "gt"
+            / f"{sample.sample_id}.pdb"
+        )
+        if source_path.is_file():
+            return source_path
+    return None
 
 
 def _build_surface_mesh_prior(
@@ -150,18 +245,10 @@ def _build_surface_mesh_prior(
     """
     import logging
     logger = logging.getLogger(__name__)
-    dataset_dir = _MESH_PT_DATASET_MAP.get(adapter.name)
-    if dataset_dir is not None:
+    pt_dir = _precomputed_dir(adapter, sample)
+    if pt_dir is not None:
         try:
-            # Derive chunk name from prior_pkl path:
-            #   .../chunk/chunkXXXX/prior_pkl/{case_id}.pkl
-            prior_pkl = sample.paths.prior_pkl
-            chunk_name = prior_pkl.parent.parent.name  # chunkXXXX
-            mesh_pt = (
-                prior_pkl.parent.parent.parent.parent.parent  # dataset root
-                / "precomputed_mesh" / "cli_v3" / dataset_dir
-                / chunk_name / f"{sample.sample_id}_mesh.pt"
-            )
+            mesh_pt = pt_dir / f"{sample.sample_id}_mesh.pt"
             if mesh_pt.exists():
                 return build_surface_from_precomputed(
                     mesh_pt_path=mesh_pt,
@@ -170,10 +257,15 @@ def _build_surface_mesh_prior(
                     monomer_transforms=transforms,
                     k=64,
                 )
-        except Exception:
+        except Exception as exc:
+            if _using_precomputed_root(adapter):
+                raise PhysPPIDataError(
+                    "malformed_precomputed_mesh_pt",
+                    f"failed to load required precomputed mesh: {mesh_pt}",
+                ) from exc
             logger.debug(
-                "mesh_prior unavailable for %s/%s; using KNN fallback",
-                dataset_dir, sample.sample_id, exc_info=True,
+                "mesh_prior unavailable for %s; using KNN fallback",
+                sample.sample_id, exc_info=True,
             )
     # Fallback to original KNN method
     k = int(adapter.physppi.num_surface_neighbors)
@@ -183,20 +275,433 @@ def _build_surface_mesh_prior(
     )
 
 
-def _derive_pt_path(sample: PriorComplexSample, dataset_dir: str, pt_name: str) -> Path | None:
-    """Derive precomputed .pt path from the prior_pkl location.
+def _resolve_physppi_sampling_weights(
+    sample_ids: list[str],
+    physppi,
+) -> list[float]:
+    """Load raw identity-based sampling weights for the selected sample IDs.
 
     PhysPPI modification (Jinyu Lin, ShanghaiTech):
-    Uses the same directory structure as mesh_prior so all .pt files
-    live alongside each other in precomputed_mesh/cli_v3/.
+      When a manifest is active the sibling ``sampling_weights.pt`` is
+      loaded and per-sample weights are mapped to the filtered ID list.
+      Raw weights are preserved so multiple datasets can be concatenated into
+      one global categorical distribution. Validation never opens the weight
+      file.
     """
-    prior_pkl = sample.paths.prior_pkl
-    chunk_name = prior_pkl.parent.parent.name  # chunkXXXX
-    return (
-        prior_pkl.parent.parent.parent.parent.parent  # dataset root
-        / "precomputed_mesh" / "cli_v3" / dataset_dir
-        / chunk_name / f"{sample.sample_id}_{pt_name}"
+    manifest = getattr(physppi, "manifest", None)
+    if (
+        manifest is None
+        or getattr(physppi, "manifest_partition", "train_ids") != "train_ids"
+    ):
+        return [1.0] * len(sample_ids)
+    configured_weights = getattr(physppi, "sampling_weights", None)
+    weights_path = (
+        Path(str(configured_weights))
+        if configured_weights is not None
+        else Path(str(manifest)).parent / "sampling_weights.pt"
     )
+    try:
+        raw = _torch.load(weights_path, map_location="cpu", weights_only=False)
+    except (FileNotFoundError, RuntimeError) as exc:
+        if configured_weights is not None:
+            raise ValueError(
+                f"could not load configured PhysPPI sampling weights: {weights_path}"
+            ) from exc
+        return [1.0] * len(sample_ids)
+    raw_weights = raw.get("sampling_weights", {}) if isinstance(raw, dict) else {}
+    if not raw_weights:
+        raise ValueError(
+            f"PhysPPI sampling weights are empty or malformed: {weights_path}"
+        )
+    missing = [sample_id for sample_id in sample_ids if sample_id not in raw_weights]
+    if missing:
+        raise ValueError(
+            "PhysPPI sampling weights do not cover selected training IDs; "
+            f"first missing IDs: {missing[:10]}"
+        )
+    probs = np.array(
+        [float(raw_weights[sid]) for sid in sample_ids],
+        dtype=np.float64,
+    )
+    invalid = ~np.isfinite(probs) | (probs <= 0)
+    if invalid.any():
+        invalid_ids = [
+            sample_ids[index] for index in np.flatnonzero(invalid)[:10]
+        ]
+        raise ValueError(
+            "PhysPPI sampling weights must be finite and positive; "
+            f"invalid IDs: {invalid_ids}"
+        )
+    return probs.tolist()
+
+
+def _has_valid_interface_dmap(sample: PriorComplexSample) -> bool:
+    """Return whether the sample has at least one usable dmap chain edge."""
+
+    try:
+        graph = build_chain_graph(sample.chain_ids, sample.dmap)
+    except Exception:
+        return False
+    return any(graph[left] for left in graph)
+
+
+def _coerce_precomputed_dmap(
+    raw_dmap: object,
+) -> dict[str, tuple[tuple[int, int, float], ...]]:
+    """Parse precomputed interface_residues.pt dmap rows without loading a sample."""
+
+    if raw_dmap is None:
+        return {}
+    if not isinstance(raw_dmap, Mapping):
+        raise ValueError("precomputed dmap must be a mapping")
+    parsed: dict[str, tuple[tuple[int, int, float], ...]] = {}
+    for chain_pair, rows in raw_dmap.items():
+        if not isinstance(chain_pair, str) or "|" not in chain_pair:
+            raise ValueError("precomputed dmap key must use chain-pair syntax")
+        row_array = rows.detach().cpu().numpy() if torch.is_tensor(rows) else rows
+        parsed_rows: list[tuple[int, int, float]] = []
+        for row in row_array:
+            if len(row) != 3:
+                raise ValueError("precomputed dmap row must have 3 columns")
+            parsed_rows.append((int(row[0]), int(row[1]), float(row[2])))
+        parsed[chain_pair] = tuple(parsed_rows)
+    return parsed
+
+
+def _has_precomputed_valid_interface_dmap(reader, sample_id: str) -> bool | None:
+    """Use only interface_residues.pt for eager dmap filtering when available.
+
+    Returning ``None`` means the reader is not a precomputed-only reader, so the
+    caller should fall back to the full sample parser.
+    """
+
+    if not getattr(reader, "precomputed_only", False):
+        return None
+    paths = reader.locate(sample_id)
+    gt_pdb = getattr(paths, "gt_pdb", None)
+    monomer_pdbs = getattr(paths, "monomer_pdbs", None)
+    if gt_pdb is None or not isinstance(monomer_pdbs, Mapping):
+        return None
+    interface_path = Path(gt_pdb).parent / f"{sample_id}_interface_residues.pt"
+    if not interface_path.is_file():
+        return False
+    raw = _torch.load(interface_path, map_location="cpu", weights_only=False)
+    raw_dmap = raw.get("dmap", {}) if isinstance(raw, Mapping) else {}
+    graph = build_chain_graph(
+        tuple(sorted(str(chain_id) for chain_id in monomer_pdbs)),
+        _coerce_precomputed_dmap(raw_dmap),
+    )
+    return any(graph[left] for left in graph)
+
+
+def _filter_sample_ids_with_valid_dmap(reader, sample_ids: list[str]) -> list[str]:
+    retained: list[str] = []
+    excluded: list[str] = []
+    for sample_id in sample_ids:
+        precomputed_status = _has_precomputed_valid_interface_dmap(reader, sample_id)
+        if precomputed_status is None:
+            sample = reader.read(sample_id)
+            is_valid = _has_valid_interface_dmap(sample)
+        else:
+            is_valid = precomputed_status
+        if is_valid:
+            retained.append(sample_id)
+        else:
+            excluded.append(sample_id)
+    if excluded:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "excluded %d PhysPPI samples without valid dmap; first 10: %s",
+            len(excluded),
+            excluded[:10],
+        )
+    return retained
+
+
+def _physppi_crop_attempt_seed(base_seed: int, attempt: int) -> int:
+    payload = f"{int(base_seed)}:{int(attempt)}".encode("utf-8")
+    digest = hashlib.blake2b(payload, digest_size=8).digest()
+    return int.from_bytes(digest, byteorder="little", signed=False)
+
+
+def _retryable_physppi_crop_error(exc: PhysPPIDataError) -> bool:
+    if not exc.args:
+        return False
+    reason = str(exc.args[0])
+    return reason in {
+        "invalid_physppi_crop",
+        "missing_mandatory_monomer_geometry",
+        "interface_preserving_crop_budget_exhausted",
+        "interface_preserving_crop_too_few_chain_residues",
+        "physppi_crop_residue_floor_violation",
+    }
+
+
+def _cropped_protein_residue_counts(atom_array: AtomArray) -> dict[str, int]:
+    """Count cropped protein residues by chain in a tokenized AtomArray."""
+
+    chain_ids = np.asarray(atom_array.chain_id).astype(str)
+    res_ids = np.asarray(atom_array.res_id).astype(int)
+    moltypes = (
+        np.asarray(atom_array.molecule_type_id)
+        if "molecule_type_id" in atom_array.get_annotation_categories()
+        else np.full(len(atom_array), int(MoleculeType.PROTEIN), dtype=np.int64)
+    )
+    residues_by_chain: dict[str, set[int]] = {}
+    for chain_id, residue_id, moltype in zip(
+        chain_ids,
+        res_ids,
+        moltypes,
+        strict=True,
+    ):
+        if int(moltype) != int(MoleculeType.PROTEIN):
+            continue
+        chain_id = str(chain_id)
+        residues_by_chain.setdefault(chain_id, set()).add(int(residue_id))
+    return {
+        chain_id: len(residue_ids)
+        for chain_id, residue_ids in sorted(residues_by_chain.items())
+    }
+
+
+def _validate_cropped_protein_residue_floor(
+    atom_array: AtomArray,
+    min_residues_per_chain: int,
+    expected_chain_ids: tuple[str, ...] | None = None,
+) -> None:
+    counts = _cropped_protein_residue_counts(atom_array)
+    chain_ids = (
+        tuple(sorted(expected_chain_ids))
+        if expected_chain_ids
+        else tuple(counts)
+    )
+    short = {
+        chain_id: counts.get(chain_id, 0)
+        for chain_id in chain_ids
+        if counts.get(chain_id, 0) < min_residues_per_chain
+    }
+    if short:
+        raise PhysPPIDataError(
+            "physppi_crop_residue_floor_violation",
+            "cropped retained protein chains below residue floor "
+            f"{min_residues_per_chain}: {short}",
+        )
+
+
+def _dmap_residue_counts(
+    dmap: Mapping[str, tuple[tuple[int, int, float], ...]],
+) -> dict[str, int]:
+    residues_by_chain: dict[str, set[int]] = {}
+    for chain_pair, rows in dmap.items():
+        if not isinstance(chain_pair, str) or "|" not in chain_pair:
+            continue
+        left, right = chain_pair.split("|", 1)
+        for row in rows:
+            residues_by_chain.setdefault(left, set()).add(int(row[0]))
+            residues_by_chain.setdefault(right, set()).add(int(row[1]))
+    return {
+        chain_id: len(residue_ids)
+        for chain_id, residue_ids in sorted(residues_by_chain.items())
+    }
+
+
+def _monomer_geometry_status(
+    atom_array: AtomArray,
+    monomer_atom_arrays: Mapping[str, AtomArray],
+) -> dict[str, dict[str, int | bool]]:
+    """Return the strict geometry stats used by mandatory monomer validation."""
+
+    result: dict[str, dict[str, int | bool]] = {}
+    retained_chains = sorted(str(chain) for chain in np.unique(atom_array.chain_id))
+    for chain_id in retained_chains:
+        monomer = monomer_atom_arrays.get(chain_id)
+        if monomer is None:
+            result[chain_id] = {
+                "has_monomer": False,
+                "matched_atom_count": 0,
+                "representative_count": 0,
+                "rank": 0,
+            }
+            continue
+
+        lookup: dict[tuple[str, int, str], np.ndarray] = {}
+        for index in range(len(monomer)):
+            coordinate = np.asarray(monomer.coord[index], dtype=np.float32)
+            if coordinate.shape != (3,) or not np.isfinite(coordinate).all():
+                continue
+            key = (
+                str(monomer.chain_id[index]),
+                int(monomer.res_id[index]),
+                str(monomer.atom_name[index]),
+            )
+            lookup.setdefault(key, coordinate)
+
+        retained_indices = np.flatnonzero(
+            np.asarray(atom_array.chain_id).astype(str) == chain_id
+        )
+        matched_atom_count = 0
+        representative_positions: list[np.ndarray] = []
+        residue_ids = np.asarray(atom_array.res_id[retained_indices], dtype=int)
+        for residue_id in dict.fromkeys(residue_ids.tolist()):
+            residue_indices = retained_indices[residue_ids == residue_id]
+            names = np.asarray(atom_array.atom_name[residue_indices]).astype(str)
+            ca_indices = residue_indices[names == "CA"]
+            candidates = ca_indices if ca_indices.size else residue_indices
+            for candidate in candidates:
+                key = (
+                    chain_id,
+                    int(atom_array.res_id[candidate]),
+                    str(atom_array.atom_name[candidate]),
+                )
+                if key in lookup:
+                    matched_atom_count += 1
+                    representative_positions.append(lookup[key])
+                    break
+
+        representatives = np.asarray(representative_positions, dtype=np.float32)
+        rank = (
+            int(np.linalg.matrix_rank(representatives - representatives[0]))
+            if representatives.size
+            else 0
+        )
+        result[chain_id] = {
+            "has_monomer": True,
+            "matched_atom_count": matched_atom_count,
+            "representative_count": int(representatives.shape[0]),
+            "rank": rank,
+        }
+    return result
+
+
+def _physppi_crop_diagnostics(
+    sample: PriorComplexSample,
+    sample_data: dict | None,
+) -> str:
+    parts = [
+        f"dmap_residue_counts={_dmap_residue_counts(getattr(sample, 'dmap', {}))}"
+    ]
+    if sample_data is None:
+        return "; ".join(parts)
+    atom_array = sample_data.get("atom_array_cropped")
+    if atom_array is not None:
+        residue_counts = _cropped_protein_residue_counts(atom_array)
+        expected_chain_ids = tuple(
+            sorted(
+                str(chain_id)
+                for chain_id in getattr(sample, "chain_sequences", {})
+            )
+        )
+        if expected_chain_ids:
+            residue_counts = {
+                chain_id: residue_counts.get(chain_id, 0)
+                for chain_id in expected_chain_ids
+            }
+        parts.append(
+            "cropped_residue_counts="
+            f"{residue_counts}"
+        )
+    monomer_inputs = sample_data.get("monomer_inputs")
+    if atom_array is not None and monomer_inputs is not None:
+        parts.append(
+            "monomer_geometry="
+            f"{_monomer_geometry_status(atom_array, monomer_inputs)}"
+        )
+    return "; ".join(parts)
+
+
+# MSA .pt loading (Jinyu Lin, ShanghaiTech)
+# Replaces _read_msa_npz() with torch.load() from precomputed _msa.pt
+# files.  Each _msa.pt contains per-chain main/paired MSA arrays,
+# deletion matrices, profiles, and deletion means — all precomputed
+# from the original .npz files.  Falls back silently to .npz when the
+# .pt is unavailable.
+
+def _load_msa_from_pt(
+    adapter,
+    sample: PriorComplexSample,
+    chain_ids: list[str],
+) -> dict | None:
+    """Load precomputed MSA arrays from ``_msa.pt`` for every chain.
+
+    Returns a dict with ``main``, ``paired``, ``profile``, and
+    ``deletion_mean`` keys, each mapping ``chain_id`` → MsaArray or
+    numpy array.  Returns ``None`` when the .pt is missing or fails.
+    """
+    pt_path = _derive_pt_path(adapter, sample, "msa.pt")
+    if pt_path is None or not pt_path.is_file():
+        return None
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        pt = _torch.load(pt_path, map_location="cpu", weights_only=False)
+    except Exception as exc:
+        if _using_precomputed_root(adapter):
+            raise PhysPPIDataError(
+                "malformed_precomputed_msa_pt",
+                f"failed to load required precomputed MSA: {pt_path}",
+            ) from exc
+        logger.debug(
+            "msa.pt load failed for %s; using .npz fallback",
+            sample.sample_id, exc_info=True,
+        )
+        return None
+
+    main = {}
+    paired = {}
+    profile = {}
+    deletion_mean = {}
+
+    pt_main = pt.get("main_msa", {})
+    pt_main_del = pt.get("main_deletion", {})
+    pt_paired = pt.get("paired_msa", {})
+    pt_paired_del = pt.get("paired_deletion", {})
+    pt_profile = pt.get("profile", {})
+    pt_del_mean = pt.get("deletion_mean", {})
+
+    for chain_id in chain_ids:
+        msa_arr = pt_main.get(chain_id)
+        if msa_arr is not None:
+            del_arr = pt_main_del.get(chain_id)
+            if del_arr is None:
+                del_arr = np.zeros(msa_arr.shape, dtype=np.int32)
+            else:
+                del_arr = np.asarray(del_arr)
+            main[chain_id] = MsaArray(
+                msa=np.asarray(msa_arr),
+                deletion_matrix=del_arr,
+                metadata=pd.DataFrame(),
+            )
+
+        paired_arr = pt_paired.get(chain_id)
+        if paired_arr is not None:
+            paired_del = pt_paired_del.get(chain_id)
+            if paired_del is None:
+                paired_del = np.zeros(paired_arr.shape, dtype=np.int32)
+            else:
+                paired_del = np.asarray(paired_del)
+            paired[chain_id] = MsaArray(
+                msa=np.asarray(paired_arr),
+                deletion_matrix=paired_del,
+                metadata=pd.DataFrame(),
+            )
+
+        prof = pt_profile.get(chain_id)
+        if prof is not None:
+            profile[chain_id] = np.asarray(prof, dtype=np.float32)
+
+        dm = pt_del_mean.get(chain_id)
+        if dm is not None:
+            deletion_mean[chain_id] = np.asarray(dm, dtype=np.float32)
+
+    if not main:
+        return None
+    return {
+        "main": main,
+        "paired": paired,
+        "profile": profile,
+        "deletion_mean": deletion_mean,
+    }
 
 
 def _build_residue_priors(
@@ -215,49 +720,62 @@ def _build_residue_priors(
     """
     import logging
     logger = logging.getLogger(__name__)
-    dataset_dir = _MESH_PT_DATASET_MAP.get(adapter.name)
 
     contact = None
     interaction = None
     tm_mask = None
     membrane = None
 
-    if dataset_dir is not None:
-        # --- interface residues ---
-        pt_path = _derive_pt_path(sample, dataset_dir, "interface_residues.pt")
-        if pt_path is not None and pt_path.exists():
-            try:
-                contact = _build_contact_from_pt(pt_path, token_index, cutoff)
-            except Exception:
-                logger.debug(
-                    "interface_residues.pt failed for %s; falling back", sample.sample_id,
-                    exc_info=True,
-                )
+    # --- interface residues ---
+    pt_path = _derive_pt_path(adapter, sample, "interface_residues.pt")
+    if pt_path is not None and pt_path.exists():
+        try:
+            contact = _build_contact_from_pt(pt_path, token_index, cutoff)
+        except Exception as exc:
+            if _using_precomputed_root(adapter):
+                raise PhysPPIDataError(
+                    "malformed_precomputed_interface_pt",
+                    f"failed to load precomputed interface residues: {pt_path}",
+                ) from exc
+            logger.debug(
+                "interface_residues.pt failed for %s; falling back", sample.sample_id,
+                exc_info=True,
+            )
 
-        # --- interaction pairs ---
-        pt_path = _derive_pt_path(sample, dataset_dir, "interaction_pairs.pt")
-        if pt_path is not None and pt_path.exists():
-            try:
-                interaction = _build_interaction_from_pt(
-                    pt_path, token_index, atom_array=atom_array,
-                )
-            except Exception:
-                logger.debug(
-                    "interaction_pairs.pt failed for %s; falling back", sample.sample_id,
-                    exc_info=True,
-                )
+    # --- interaction pairs ---
+    pt_path = _derive_pt_path(adapter, sample, "interaction_pairs.pt")
+    if pt_path is not None and pt_path.exists():
+        try:
+            interaction = _build_interaction_from_pt(
+                pt_path, token_index, atom_array=atom_array,
+            )
+        except Exception as exc:
+            if _using_precomputed_root(adapter):
+                raise PhysPPIDataError(
+                    "malformed_precomputed_interaction_pt",
+                    f"failed to load precomputed interaction pairs: {pt_path}",
+                ) from exc
+            logger.debug(
+                "interaction_pairs.pt failed for %s; falling back", sample.sample_id,
+                exc_info=True,
+            )
 
-        # --- membrane relative location ---
-        pt_path = _derive_pt_path(sample, dataset_dir, "membrane_relative_location.pt")
-        if pt_path is not None and pt_path.exists():
-            try:
-                tm_mask = _build_tm_from_pt(pt_path, token_index)
-                membrane = _build_membrane_target_from_pt(pt_path)
-            except Exception:
-                logger.debug(
-                    "membrane_relative_location.pt failed for %s; falling back",
-                    sample.sample_id, exc_info=True,
-                )
+    # --- membrane relative location ---
+    pt_path = _derive_pt_path(adapter, sample, "membrane_relative_location.pt")
+    if pt_path is not None and pt_path.exists():
+        try:
+            tm_mask = _build_tm_from_pt(pt_path, token_index)
+            membrane = _build_membrane_target_from_pt(pt_path)
+        except Exception as exc:
+            if _using_precomputed_root(adapter):
+                raise PhysPPIDataError(
+                    "malformed_precomputed_membrane_pt",
+                    f"failed to load precomputed membrane relative location: {pt_path}",
+                ) from exc
+            logger.debug(
+                "membrane_relative_location.pt failed for %s; falling back",
+                sample.sample_id, exc_info=True,
+            )
 
     return contact, interaction, tm_mask, membrane
 
@@ -475,6 +993,7 @@ def select_retained_chain_view(
     sample: PriorComplexSample,
     rng: np.random.Generator,
     occurrence_seed: int,
+    candidate_cap: int = 1024,
 ) -> RetainedChainView:
     """Select the sole retained view for this immutable sample occurrence."""
 
@@ -511,6 +1030,11 @@ def select_retained_chain_view(
         build_chain_graph(chain_ids, sample.dmap),
         rng,
         trigger,
+        chain_lengths={
+            chain_id: len(sample.chain_sequences.get(chain_id, ""))
+            for chain_id in chain_ids
+        },
+        candidate_cap=candidate_cap,
         parent_sample_id=sample.sample_id,
         occurrence_seed=occurrence_seed,
     )
@@ -611,6 +1135,190 @@ def _token_starts(atom_array: AtomArray) -> np.ndarray:
     token_ids = np.asarray(atom_array.token_id)
     _, starts = np.unique(token_ids, return_index=True)
     return np.sort(starts)
+
+
+def _token_center_for_indices(atom_array: AtomArray, indices: np.ndarray) -> int:
+    if "token_center_atom" in atom_array.get_annotation_categories():
+        center_indices = indices[np.asarray(atom_array.token_center_atom[indices]).astype(bool)]
+        if center_indices.size:
+            return int(center_indices[0])
+    names = np.asarray(atom_array.atom_name[indices]).astype(str)
+    ca_indices = indices[names == "CA"]
+    return int(ca_indices[0] if ca_indices.size else indices[0])
+
+
+def _stable_jittered_order(
+    items,
+    rng: np.random.Generator,
+    key,
+) -> list:
+    ordered = sorted(items, key=key)
+    jitters = rng.random(len(ordered)) if ordered else np.asarray([], dtype=float)
+    return [
+        item
+        for _, item in sorted(
+            zip(jitters, ordered, strict=True),
+            key=lambda pair: (key(pair[1]), float(pair[0])),
+        )
+    ]
+
+
+def _physppi_interface_preserving_crop_mask(
+    atom_array: AtomArray,
+    dmap: Mapping[str, tuple[tuple[int, int, float], ...]],
+    *,
+    token_budget: int,
+    min_residues_per_chain: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Build a PhysPPI crop mask that prioritizes chain coverage and dmap."""
+
+    starts = _token_starts(atom_array)
+    token_ids = np.asarray(atom_array.token_id)
+    chain_ids = np.asarray(atom_array.chain_id).astype(str)
+    res_ids = np.asarray(atom_array.res_id).astype(int)
+    moltypes = (
+        np.asarray(atom_array.molecule_type_id)
+        if "molecule_type_id" in atom_array.get_annotation_categories()
+        else np.full(len(atom_array), int(MoleculeType.PROTEIN), dtype=np.int64)
+    )
+
+    residue_to_tokens: dict[tuple[str, int], set[int]] = {}
+    residue_coord: dict[tuple[str, int], np.ndarray] = {}
+    protein_residues_by_chain: dict[str, set[tuple[str, int]]] = {}
+    token_to_indices: dict[int, np.ndarray] = {}
+    for token_id in np.unique(token_ids):
+        indices = np.flatnonzero(token_ids == token_id)
+        token_to_indices[int(token_id)] = indices
+    for start in starts:
+        token_id = int(token_ids[start])
+        chain_id = str(chain_ids[start])
+        residue_id = int(res_ids[start])
+        key = (chain_id, residue_id)
+        residue_to_tokens.setdefault(key, set()).add(token_id)
+        center_index = _token_center_for_indices(atom_array, token_to_indices[token_id])
+        residue_coord.setdefault(
+            key,
+            np.asarray(atom_array.coord[center_index], dtype=np.float32),
+        )
+        if int(moltypes[start]) == int(MoleculeType.PROTEIN):
+            protein_residues_by_chain.setdefault(chain_id, set()).add(key)
+
+    dmap_priority: dict[tuple[str, int], float] = {}
+    for chain_pair, rows in dmap.items():
+        if not isinstance(chain_pair, str) or "|" not in chain_pair:
+            continue
+        left, right = chain_pair.split("|", 1)
+        for row in rows:
+            left_key = (left, int(row[0]))
+            right_key = (right, int(row[1]))
+            distance = float(row[2])
+            for key in (left_key, right_key):
+                if key not in residue_to_tokens:
+                    continue
+                dmap_priority[key] = min(distance, dmap_priority.get(key, distance))
+
+    if not dmap_priority:
+        raise PhysPPIDataError(
+            "missing_interface_dmap_for_retained_view",
+            "retained view has no dmap residues that map to tokens",
+        )
+
+    selected_residues: set[tuple[str, int]] = set()
+    selected_tokens: set[int] = set()
+
+    def add_residue(key: tuple[str, int], *, required: bool) -> bool:
+        tokens = residue_to_tokens.get(key, set())
+        new_tokens = tokens - selected_tokens
+        if not new_tokens:
+            selected_residues.add(key)
+            return True
+        if len(selected_tokens) + len(new_tokens) > token_budget:
+            if required:
+                raise PhysPPIDataError(
+                    "interface_preserving_crop_budget_exhausted",
+                    "cannot satisfy required per-chain residue floor within token budget",
+                )
+            return False
+        selected_residues.add(key)
+        selected_tokens.update(new_tokens)
+        return True
+
+    def min_distance_to(keys: set[tuple[str, int]], coord: np.ndarray) -> float:
+        coords = [
+            residue_coord[key]
+            for key in keys
+            if key in residue_coord and np.isfinite(residue_coord[key]).all()
+        ]
+        if not coords:
+            return float("inf")
+        stacked = np.stack(coords, axis=0)
+        return float(np.linalg.norm(stacked - coord.reshape(1, 3), axis=1).min())
+
+    for chain_id in sorted(protein_residues_by_chain):
+        chain_residues = protein_residues_by_chain[chain_id]
+        chain_dmap = [
+            key for key in chain_residues if key in dmap_priority
+        ]
+        chain_dmap = _stable_jittered_order(
+            chain_dmap,
+            rng,
+            key=lambda item: (dmap_priority[item], item[0], item[1]),
+        )
+        anchors = list(chain_dmap[:min_residues_per_chain])
+        if len(anchors) < min_residues_per_chain:
+            anchor_set = set(chain_dmap)
+            context = [
+                key for key in chain_residues if key not in anchor_set
+            ]
+            context = _stable_jittered_order(
+                context,
+                rng,
+                key=lambda item: (
+                    min_distance_to(anchor_set, residue_coord[item]),
+                    item[0],
+                    item[1],
+                ),
+            )
+            anchors.extend(context[: min_residues_per_chain - len(anchors)])
+        if len(anchors) < min_residues_per_chain:
+            raise PhysPPIDataError(
+                "interface_preserving_crop_too_few_chain_residues",
+                f"chain {chain_id!r} has fewer than {min_residues_per_chain} residues",
+            )
+        for key in anchors:
+            add_residue(key, required=True)
+
+    dmap_residues = _stable_jittered_order(
+        dmap_priority,
+        rng,
+        key=lambda item: (dmap_priority[item], item[0], item[1]),
+    )
+    for key in dmap_residues:
+        add_residue(key, required=False)
+
+    retained_interface = set(selected_residues) & set(dmap_priority)
+    if not retained_interface:
+        retained_interface = set(selected_residues)
+    context_residues = [
+        key for key in residue_to_tokens if key not in selected_residues
+    ]
+    context_residues = _stable_jittered_order(
+        context_residues,
+        rng,
+        key=lambda item: (
+            min_distance_to(retained_interface, residue_coord[item]),
+            item[0],
+            item[1],
+        ),
+    )
+    for key in context_residues:
+        if len(selected_tokens) >= token_budget:
+            break
+        add_residue(key, required=False)
+
+    mask = np.isin(token_ids, np.asarray(sorted(selected_tokens), dtype=token_ids.dtype))
+    return np.asarray(mask, dtype=bool)
 
 
 def _crop_monomer_template_to_query_tokens(
@@ -1326,7 +2034,7 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
 
     reader_name = "PhysPPI"
 
-    def __init__(self, dataset_config) -> None:
+    def __init__(self, dataset_config, world_size: int | None = None) -> None:
         super().__init__(dataset_config)
         ccd_file = dataset_config.dataset_paths.ccd_file
         self._physppi_ccd_file = Path(ccd_file) if ccd_file is not None else None
@@ -1417,7 +2125,8 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
 
     def create_datapoint_cache_from_reader(self, reader, physppi) -> None:
         sample_ids = list(reader.sample_ids())
-        if physppi.manifest is not None:
+        manifest_bound = physppi.manifest is not None
+        if manifest_bound:
             if physppi.sample_ids:
                 raise ValueError("manifest and sample_ids are mutually exclusive")
             try:
@@ -1435,13 +2144,18 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
             ):
                 raise ValueError("PhysPPI manifest partition must be a list of IDs")
             reader_ids = set(sample_ids)
-            missing_ids = sorted(set(manifest_ids) - reader_ids)
-            if missing_ids:
-                raise ValueError(
-                    "PhysPPI manifest contains IDs absent from the reader: "
-                    f"{missing_ids[:10]}"
-                )
             selected_ids = set(manifest_ids)
+            missing_ids = selected_ids - reader_ids
+            if missing_ids:
+                import logging
+                _logger = logging.getLogger(__name__)
+                _logger.warning(
+                    "PhysPPI manifest contains %d IDs absent from the reader "
+                    "(e.g. still in .chunk/ staging); they will be excluded "
+                    "from this run. First 10: %s",
+                    len(missing_ids),
+                    sorted(missing_ids)[:10],
+                )
             sample_ids = [
                 sample_id for sample_id in sample_ids if sample_id in selected_ids
             ]
@@ -1450,11 +2164,22 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
             sample_ids = [sample_id for sample_id in sample_ids if sample_id in allowed]
         if physppi.max_samples is not None:
             sample_ids = sample_ids[: int(physppi.max_samples)]
+
+        if not manifest_bound:
+            sample_ids = _filter_sample_ids_with_valid_dmap(reader, sample_ids)
+
+        # PhysPPI modification (Jinyu Lin, ShanghaiTech):
+        #   Load identity-based sampling weights when a manifest is active.
+        #   Raw weights are preserved for the global datapoint sampler.
+        datapoint_probabilities = _resolve_physppi_sampling_weights(
+            sample_ids, physppi
+        )
+
         self.datapoint_cache = pd.DataFrame(
             {
                 "pdb_id": sample_ids,
                 "preferred_chain_or_interface": [None] * len(sample_ids),
-                "datapoint_probabilities": [1.0] * len(sample_ids),
+                "datapoint_probabilities": datapoint_probabilities,
                 "n_clust": [1] * len(sample_ids),
             }
         )
@@ -1469,26 +2194,97 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
         preferred_chain_or_interface: str | list[str, str] | None,
         return_full_atom_array: bool,
         return_crop_strategy: bool,
+        crop_attempt_seed: int | None = None,
     ) -> dict:
-        raw_atom_array = _restrict_gt_atom_array_to_sample(
-            _parse_pdb_atom_array(sample.paths.gt_pdb), sample
-        )
-        ccd = self._ccd_for_atom_array(raw_atom_array)
-        atom_array = _canonical_ppi_heavy_atom_array(
-            raw_atom_array, self.reference_molecule_directory, ccd=ccd
-        )
-        self._ensure_ccd_reference_molecules(atom_array, ccd)
-        atom_array = _annotate_canonical_mol_entity_ids(atom_array, sample)
+        # PhysPPI modification (Jinyu Lin, ShanghaiTech):
+        #   Prefer precomputed GT AtomArray from _gt.pt.  The .pt already
+        #   contains the canonized heavy-atom structure so we skip PDB
+        #   parsing + _canonical_ppi_heavy_atom_array.  Falls back to the
+        #   original PDB path when the .pt is missing.
+        gt_pt = _derive_pt_path(self, sample, "gt.pt")
+        gt_from_cache = None
+        if gt_pt is not None and gt_pt.is_file():
+            try:
+                gt_from_cache = _load_atomarray_from_pt(gt_pt)
+            except Exception as exc:
+                if _using_precomputed_root(self):
+                    raise PhysPPIDataError(
+                        "malformed_precomputed_gt_pt",
+                        f"failed to load required precomputed GT: {gt_pt}",
+                    ) from exc
+        elif _using_precomputed_root(self):
+            raise PhysPPIDataError(
+                "missing_precomputed_gt_pt",
+                f"required precomputed GT is missing: {gt_pt}",
+            )
+
+        if gt_from_cache is not None:
+            raw_atom_array = _restrict_gt_atom_array_to_sample(
+                gt_from_cache, sample
+            )
+            atom_array = raw_atom_array  # already canonized in .pt
+            ccd = self._ccd_for_atom_array(atom_array)
+            self._ensure_ccd_reference_molecules(atom_array, ccd)
+            atom_array = _annotate_canonical_mol_entity_ids(atom_array, sample)
+        else:
+            raw_atom_array = _restrict_gt_atom_array_to_sample(
+                _parse_pdb_atom_array(sample.paths.gt_pdb), sample
+            )
+            ccd = self._ccd_for_atom_array(raw_atom_array)
+            atom_array = _canonical_ppi_heavy_atom_array(
+                raw_atom_array, self.reference_molecule_directory, ccd=ccd
+            )
+            self._ensure_ccd_reference_molecules(atom_array, ccd)
+            atom_array = _annotate_canonical_mol_entity_ids(atom_array, sample)
+
         per_chain_metadata = _chain_metadata(atom_array)
-        processed = process_target_atom_array_of3(
-            atom_array=atom_array,
-            pdb_id=sample.sample_id,
-            crop_config=self.crop,
-            preferred_chain_or_interface=preferred_chain_or_interface,
-            per_chain_metadata=per_chain_metadata,
+        token_crop_settings = self.crop["token_crop"]
+        use_physppi_crop = (
+            bool(getattr(self.physppi, "interface_preserving_crop", True))
+            and bool(token_crop_settings["enabled"])
         )
-        atom_array_gt = processed.atom_array_gt
-        self.n_tokens = processed.n_tokens
+        if use_physppi_crop:
+            processed = process_target_atom_array_of3(
+                atom_array=atom_array,
+                pdb_id=sample.sample_id,
+                crop_config={
+                    "chain_crop": {"enabled": False},
+                    "token_crop": {"enabled": False},
+                },
+                preferred_chain_or_interface=preferred_chain_or_interface,
+                per_chain_metadata=per_chain_metadata,
+            )
+            atom_array_gt = processed.atom_array_gt
+            token_budget = int(token_crop_settings["token_budget"])
+            crop_mask = _physppi_interface_preserving_crop_mask(
+                atom_array_gt,
+                sample.dmap,
+                token_budget=token_budget,
+                min_residues_per_chain=int(
+                    getattr(
+                        self.physppi,
+                        "min_residues_per_retained_protein_chain",
+                        15,
+                    )
+                ),
+                rng=np.random.default_rng(
+                    0 if crop_attempt_seed is None else int(crop_attempt_seed)
+                ),
+            )
+            atom_array_gt.set_annotation("crop_mask", crop_mask)
+            crop_strategy = "spatial_interface"
+            self.n_tokens = token_budget
+        else:
+            processed = process_target_atom_array_of3(
+                atom_array=atom_array,
+                pdb_id=sample.sample_id,
+                crop_config=self.crop,
+                preferred_chain_or_interface=preferred_chain_or_interface,
+                per_chain_metadata=per_chain_metadata,
+            )
+            atom_array_gt = processed.atom_array_gt
+            crop_strategy = processed.crop_strategy
+            self.n_tokens = processed.n_tokens
         processed_reference_molecules = get_reference_conformer_data_of3(
             atom_array=atom_array_gt,
             per_chain_metadata=per_chain_metadata,
@@ -1499,7 +2295,7 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
         atom_array_full = atom_array_gt.copy() if return_full_atom_array else None
         atom_array_cropped, atom_array_gt = separate_cropped_and_gt(
             atom_array_gt=atom_array_gt,
-            crop_strategy=processed.crop_strategy,
+            crop_strategy=crop_strategy,
             processed_ref_mol_list=processed_reference_molecules,
         )
         add_token_positions(atom_array_cropped)
@@ -1520,7 +2316,7 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
         if return_full_atom_array:
             target_structure_data["atom_array"] = atom_array_full
         if return_crop_strategy:
-            target_structure_data["crop_strategy"] = processed.crop_strategy
+            target_structure_data["crop_strategy"] = crop_strategy
         return target_structure_data
 
     def create_canonical_msa_features(
@@ -1535,11 +2331,41 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
             chain_id: _query_only_msa(_sequence_for_chain(atom_array, chain_id))
             for chain_id in chain_ids
         }
-        main_msas, _ = _build_main_msas(sample, chain_ids, query_msas)
-        paired_by_path = {
-            key: _read_msa_npz(path)
-            for key, path in sample.paths.paired_msa_npzs.items()
-        }
+
+        # PhysPPI modification (Jinyu Lin, ShanghaiTech):
+        #   Prefer precomputed _msa.pt over reading individual .npz files.
+        #   The .pt stores per-chain MsaArrays (main + paired) that replace
+        #   _build_main_msas / _read_msa_npz.  Projection, truncation, and
+        #   profile computation still run on top of the loaded arrays.
+        pt_msa = _load_msa_from_pt(self, sample, chain_ids)
+
+        if pt_msa is not None:
+            # PhysPPI modification (Jinyu Lin, ShanghaiTech):
+            #   Precomputed MSAs have columns for ALL GT residues (different
+            #   per chain).  Project each chain to its query tokens so that
+            #   column counts match across chains for vstack_pad_msa_arrays.
+            main_msas = {}
+            for chain_id in chain_ids:
+                src = pt_msa["main"].get(chain_id)
+                if src is not None:
+                    projected = _project_msa_to_query_tokens(src, query_msas[chain_id])
+                    if projected is not None:
+                        main_msas[chain_id] = projected
+                        continue
+                # Fall back to query-only (same as _build_main_msas)
+                main_msas[chain_id] = query_msas[chain_id]
+            paired_by_path = pt_msa["paired"]
+            pt_profiles = pt_msa.get("profile", {})
+            pt_deletion_mean = pt_msa.get("deletion_mean", {})
+        else:
+            main_msas, _ = _build_main_msas(sample, chain_ids, query_msas)
+            paired_by_path = {
+                key: _read_msa_npz(path)
+                for key, path in sample.paths.paired_msa_npzs.items()
+            }
+            pt_profiles = {}
+            pt_deletion_mean = {}
+
         paired_msas: dict[str, MsaArray] = {}
         paired_available: list[bool] = []
         for chain_id in chain_ids:
@@ -1582,18 +2408,32 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
             rep_id_to_chain_id=rep_to_chain,
             rep_id_to_mol_type=rep_to_mol,
         )
-        profiles = {
-            chain_id: calculate_profile(
-                msa_array=main_msas[chain_id].msa,
-                molecule_type=MoleculeType.PROTEIN,
-                chunk_size=1000,
-            )
-            for chain_id in chain_ids
-        }
-        deletion_mean = {
-            chain_id: np.mean(main_msas[chain_id].deletion_matrix, axis=0)
-            for chain_id in chain_ids
-        }
+        # PhysPPI modification (Jinyu Lin, ShanghaiTech):
+        #   Use precomputed profile / deletion_mean from _msa.pt when the
+        #   MSA was not projected (column count unchanged).  Otherwise fall
+        #   back to computing them from the projected MSA.
+        profiles: dict[str, np.ndarray] = {}
+        deletion_mean: dict[str, np.ndarray] = {}
+        for chain_id in chain_ids:
+            msa = main_msas[chain_id]
+            pt_prof = pt_profiles.get(chain_id)
+            pt_dm = pt_deletion_mean.get(chain_id)
+            if (
+                pt_prof is not None
+                and pt_dm is not None
+                and pt_prof.shape[0] == msa.msa.shape[1]
+            ):
+                profiles[chain_id] = pt_prof
+                deletion_mean[chain_id] = pt_dm
+            else:
+                profiles[chain_id] = calculate_profile(
+                    msa_array=msa.msa,
+                    molecule_type=MoleculeType.PROTEIN,
+                    chunk_size=1000,
+                )
+                deletion_mean[chain_id] = np.mean(
+                    msa.deletion_matrix, axis=0
+                )
         max_main_rows = max(len(msa) for msa in main_msas.values()) if main_msas else 0
         collection.set_state_processed(
             chain_id_to_query_seq=query_msas,
@@ -1640,8 +2480,32 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
     def _load_mandatory_monomer_inputs(
         self, sample: PriorComplexSample, atom_array: AtomArray
     ) -> dict[str, AtomArray]:
+        # PhysPPI modification (Jinyu Lin, ShanghaiTech):
+        #   Prefer precomputed monomer AtomArrays from _{chain}_monomer.pt.
+        #   Each .pt already has the fully-processed structure (parsed,
+        #   canonized, no-crop processed, token-positioned).  Falls back
+        #   to PDB parsing for chains whose .pt is missing.
+        cache_dir = _precomputed_dir(self, sample)
         monomer_inputs: dict[str, AtomArray] = {}
         for chain_id in sorted(str(chain) for chain in np.unique(atom_array.chain_id)):
+            if cache_dir is not None:
+                pt_path = cache_dir / f"{sample.sample_id}_{chain_id}_monomer.pt"
+                try:
+                    if pt_path.is_file():
+                        monomer_inputs[chain_id] = _load_atomarray_from_pt(pt_path)
+                        continue
+                except Exception as exc:
+                    if _using_precomputed_root(self):
+                        raise PhysPPIDataError(
+                            "malformed_precomputed_monomer_pt",
+                            f"failed to load required precomputed monomer: {pt_path}",
+                        ) from exc
+                    pass  # fall through to PDB path
+                if _using_precomputed_root(self):
+                    raise PhysPPIDataError(
+                        "missing_precomputed_monomer_pt",
+                        f"required precomputed monomer is missing: {pt_path}",
+                    )
             path = sample.paths.monomer_pdbs.get(chain_id)
             if path is None:
                 raise PhysPPIDataError(
@@ -1685,7 +2549,13 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
         )
 
     def create_loss_features(self, pdb_id: str) -> dict:
-        return {"loss_weights": set_loss_weights(self.loss, resolution=None)}
+        return {
+            "loss_weights": set_loss_weights(self.loss, resolution=None),
+            "physppi_loss_weight": _torch.tensor(
+                float(self.physppi.loss_weight),
+                dtype=_torch.float32,
+            ),
+        }
 
     def build_prior_features(
         self,
@@ -1735,14 +2605,29 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
         else:
             res_loc = sample.opm.get("res_loc", {}) if isinstance(sample.opm, dict) else {}
             tm_mask = build_tm_features(res_loc, token_index)
+        # PhysPPI modification (Jinyu Lin, ShanghaiTech):
+        #   Precomputed mesh adapter returns physppi_surface_local_coords /
+        #   physppi_surface_features / ...; the legacy KNN fallback returns
+        #   coords / features / ...  Accept either convention.
+        if "physppi_surface_local_coords" in surface:
+            surf_coords = surface["physppi_surface_local_coords"]
+            surf_feats = surface["physppi_surface_features"]
+            surf_mask = surface["physppi_surface_mask"]
+            surf_charge = surface["physppi_surface_charge_mask"]
+        else:
+            surf_coords = surface["coords"]
+            surf_feats = surface["features"]
+            surf_mask = surface["mask"]
+            surf_charge = surface["charge_mask"]
+
         padded_payloads = _pad_prior_payloads_to_token_count(
             {
                 "contact": np.asarray(contact["pair_mask"], dtype=bool),
                 "interaction": np.asarray(interaction["type_mask"], dtype=bool),
-                "surface_coords": np.asarray(surface["coords"], dtype=np.float32),
-                "surface_features": np.asarray(surface["features"], dtype=np.float32),
-                "surface_mask": np.asarray(surface["mask"], dtype=bool),
-                "surface_charge_mask": np.asarray(surface["charge_mask"], dtype=bool),
+                "surface_coords": np.asarray(surf_coords, dtype=np.float32),
+                "surface_features": np.asarray(surf_feats, dtype=np.float32),
+                "surface_mask": np.asarray(surf_mask, dtype=bool),
+                "surface_charge_mask": np.asarray(surf_charge, dtype=bool),
                 "tm": np.asarray(tm_mask, dtype=bool),
             },
             n_tokens,
@@ -1809,6 +2694,7 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
         preferred_chain_or_interface: str | list[str, str] | None,
         return_atom_arrays: bool,
         return_crop_strategy: bool,
+        crop_attempt_seed: int | None = None,
     ) -> dict:
         sample_data = {"features": {}}
         structure_data = self.create_canonical_structure_features(
@@ -1816,6 +2702,7 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
             preferred_chain_or_interface,
             return_atom_arrays,
             return_crop_strategy,
+            crop_attempt_seed,
         )
         sample_data["features"].update(structure_data["target_structure_features"])
         sample_data["features"].update(structure_data["reference_conformer_features"])
@@ -1902,6 +2789,7 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
 
     def build_sample_features(self, sample: PriorComplexSample, datapoint) -> dict:
         occurrence = self.occurrence
+        physppi = getattr(self, "physppi", None)
         occurrence_rng = build_occurrence_rng(
             self._physppi_data_seed,
             occurrence.epoch if occurrence is not None else 0,
@@ -1913,20 +2801,97 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
             sample,
             occurrence_rng.chain_view,
             occurrence_rng.seed,
+            candidate_cap=int(
+                getattr(physppi, "retained_view_candidate_cap", 1024)
+            ),
         )
         restricted_sample = restrict_prior_sample_to_chains(
             sample, view.source_chain_ids
         )
-        sample_data = self.create_canonical_all_features(
-            sample=restricted_sample,
-            preferred_chain_or_interface=datapoint["preferred_chain_or_interface"],
-            return_atom_arrays=True,
-            return_crop_strategy=False,
+        retry_attempts = int(
+            getattr(physppi, "geometry_crop_retry_attempts", 16)
         )
-        features = self.finish_physppi_features(restricted_sample, sample_data)
+        residue_floor = getattr(
+            physppi,
+            "min_residues_per_retained_protein_chain",
+            None,
+        )
+        last_crop_error: PhysPPIDataError | None = None
+        last_crop_details = ""
+        for attempt in range(retry_attempts):
+            crop_attempt_seed = _physppi_crop_attempt_seed(
+                occurrence_rng.seed,
+                attempt,
+            )
+            sample_data = None
+            try:
+                sample_data = self.create_canonical_all_features(
+                    sample=restricted_sample,
+                    preferred_chain_or_interface=datapoint[
+                        "preferred_chain_or_interface"
+                    ],
+                    return_atom_arrays=True,
+                    return_crop_strategy=False,
+                    crop_attempt_seed=crop_attempt_seed,
+                )
+                if residue_floor is not None:
+                    _validate_cropped_protein_residue_floor(
+                        sample_data["atom_array_cropped"],
+                        int(residue_floor),
+                        tuple(
+                            sorted(
+                                str(chain_id)
+                                for chain_id in getattr(
+                                    restricted_sample,
+                                    "chain_sequences",
+                                    {},
+                                )
+                            )
+                        )
+                        or None,
+                    )
+                features = self.finish_physppi_features(
+                    restricted_sample,
+                    sample_data,
+                )
+                break
+            except PhysPPIDataError as exc:
+                if not _retryable_physppi_crop_error(exc):
+                    raise
+                last_crop_error = exc
+                last_crop_details = _physppi_crop_diagnostics(
+                    restricted_sample,
+                    sample_data,
+                )
+        else:
+            detail = (
+                f"sample {sample.sample_id!r} retained chains "
+                f"{view.source_chain_ids!r} failed {retry_attempts} crop attempts"
+            )
+            if last_crop_details:
+                detail = f"{detail}; last_attempt={last_crop_details}"
+            if last_crop_error is not None:
+                detail = f"{detail}; last_error={last_crop_error}"
+            raise PhysPPIDataError(
+                "physppi_crop_retry_exhausted",
+                detail,
+            ) from last_crop_error
         features.update(encode_retained_chain_view(view))
         if self.debug_mode:
             check_invalid_feature_dict(features)
         features["pdb_id"] = sample.sample_id
+        source_gt_pdb = _source_training_gt_pdb_path(sample)
+        if source_gt_pdb is not None:
+            features["physppi_gt_pdb_path"] = str(source_gt_pdb)
         features["preferred_chain_or_interface"] = "None"
+        atom_array_cropped = sample_data["atom_array_cropped"]
+        atom_count = len(atom_array_cropped)
+        feature_atom_count = int(features["atom_mask"].shape[-1])
+        if atom_count != feature_atom_count:
+            raise ValueError(
+                "cropped AtomArray atom order contract failed for "
+                f"{sample.sample_id}: atom_array={atom_count}, "
+                f"atom_mask={feature_atom_count}"
+            )
+        features["atom_array"] = atom_array_cropped
         return features

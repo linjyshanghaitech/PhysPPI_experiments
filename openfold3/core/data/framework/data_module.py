@@ -166,6 +166,7 @@ class DataModuleConfig(BaseModel):
     data_seed: int = 42
     epoch_len: int = 1
     distinct_samples_per_rank_group: bool = False
+    global_datapoint_sampling: bool = False
 
     @staticmethod
     def safe_multiprocessing_context(
@@ -263,6 +264,9 @@ class DataModule(pl.LightningDataModule):
         self.distinct_samples_per_rank_group = (
             data_module_config.distinct_samples_per_rank_group
         )
+        self.global_datapoint_sampling = (
+            data_module_config.global_datapoint_sampling
+        )
         self.next_dataset_indices = {}
         # next_epoch is None to start with in the 1st epoch
         self.next_epoch = None
@@ -293,10 +297,9 @@ class DataModule(pl.LightningDataModule):
                 continue
             manifest_path = Path(manifest)
             if manifest_path not in sha256_by_path:
-                with manifest_path.open("rb") as manifest_file:
-                    sha256_by_path[manifest_path] = hashlib.file_digest(
-                        manifest_file, "sha256"
-                    ).hexdigest()
+                sha256_by_path[manifest_path] = hashlib.sha256(
+                    manifest_path.read_bytes()
+                ).hexdigest()
             sha256_by_dataset[cfg.name] = sha256_by_path[manifest_path]
         return sha256_by_dataset
 
@@ -330,17 +333,7 @@ class DataModule(pl.LightningDataModule):
                 multi_dataset_config_mode, set_world_size=True
             )
 
-            if len(mode_datasets) > 1:
-                warnings.warn(
-                    f"Currently only one {dataset_mode} dataset is supported, but "
-                    f"{len(mode_datasets)} datasets were found. Using only the "
-                    "first one.",
-                    stacklevel=2,
-                )
-
-            self.datasets_by_mode[dataset_mode] = (
-                mode_datasets[0] if mode_datasets else []
-            )
+            self.datasets_by_mode[dataset_mode] = mode_datasets
 
     @classmethod
     def parse_data_config(cls, data_config: list[dict]) -> MultiDatasetConfig:
@@ -509,7 +502,9 @@ class DataModule(pl.LightningDataModule):
             datasets.append(dataset)
         return datasets
 
-    def generate_dataloader(self, mode: DatasetMode, sampler: Sampler | None = None):
+    def generate_dataloader(
+        self, mode: DatasetMode, sampler: Sampler | None = None, dataset=None
+    ):
         """Wrap the appropriate dataset in a DataLoader and return it.
 
         Args:
@@ -519,6 +514,9 @@ class DataModule(pl.LightningDataModule):
                 Sampler to use for sampling the dataset. When training,
                 OF3DistributedSampler is used to sample dataset-datapoint
                 pairs.
+            dataset:
+                Optional explicit dataset.  When omitted the dataset stored
+                in ``self.datasets_by_mode[mode]`` is used.
 
         Returns:
             DataLoader: DataLoader object.
@@ -563,7 +561,7 @@ class DataModule(pl.LightningDataModule):
             f"rank={self.global_rank}."
         )
         return DataLoader(
-            dataset=self.datasets_by_mode[mode],
+            dataset=dataset if dataset is not None else self.datasets_by_mode[mode],
             batch_size=self.batch_size,
             sampler=sampler,
             num_workers=num_workers,
@@ -597,6 +595,7 @@ class DataModule(pl.LightningDataModule):
             rank=self.global_rank,
             seed=self.data_seed,
             distinct_samples_per_rank_group=self.distinct_samples_per_rank_group,
+            global_datapoint_sampling=self.global_datapoint_sampling,
         )
 
         # next_epoch is not None starting from the 2nd epoch and in all epochs
@@ -606,13 +605,25 @@ class DataModule(pl.LightningDataModule):
 
         return self.generate_dataloader(DatasetMode.train, sampler=sampler)
 
-    def val_dataloader(self) -> DataLoader:
-        """Creates validation dataloader.
+    def val_dataloader(self) -> DataLoader | list[DataLoader]:
+        """Creates validation dataloader(s).
+
+        When multiple validation datasets are configured, returns one
+        DataLoader per dataset so that PyTorch Lightning routes each
+        batch with a ``dataloader_idx``.
 
         Returns:
-            DataLoader: validation dataloader.
+            DataLoader or list[DataLoader]: validation dataloader(s).
         """
-        return self.generate_dataloader(DatasetMode.validation)
+        val_datasets = self.datasets_by_mode.get(DatasetMode.validation, [])
+        if not val_datasets:
+            return self.generate_dataloader(DatasetMode.validation)
+        dataloaders = []
+        for ds in val_datasets:
+            dataloaders.append(
+                self.generate_dataloader(DatasetMode.validation, dataset=ds)
+            )
+        return dataloaders if len(dataloaders) > 1 else dataloaders[0]
 
     def test_dataloader(self) -> DataLoader:
         """Creates test dataloader.
@@ -791,11 +802,19 @@ def openfold_batch_collator(samples: list[dict[str, torch.Tensor]]):
         for sample in samples:
             ref_space_uid_to_perm_dicts.append(sample.pop("ref_space_uid_to_perm"))
 
+    # atom_array is a biotite AtomArray, not a tensor — pop before padding
+    has_atom_array = "atom_array" in samples[0]
+    if has_atom_array:
+        atom_arrays = [sample.pop("atom_array") for sample in samples]
+
     samples = dict_multimap(pad_feat_fn, samples)
 
     # Add the ref_space_uid_to_perm back to the samples
     if has_ref_space_uid_to_perm:
         samples["ref_space_uid_to_perm"] = ref_space_uid_to_perm_dicts
+
+    if has_atom_array:
+        samples["atom_array"] = atom_arrays
 
     if has_pdb_id:
         samples["pdb_id"] = pdb_ids

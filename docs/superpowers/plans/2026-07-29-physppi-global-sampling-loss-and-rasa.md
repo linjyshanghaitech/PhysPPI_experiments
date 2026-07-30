@@ -18,12 +18,13 @@
 
 - [ ] Add a regression test whose full and cropped AtomArrays have different
   identities, lengths, and atom order, then assert that collation preserves
-  the exact cropped object and that its length matches `atom_mask` and
-  ground-truth positions.
+  the exact cropped object and that its length matches `atom_mask`; allow the
+  pre-alignment ground truth to retain additional symmetry-equivalent atoms.
 - [ ] Run the focused test and verify that it fails because the full object is returned.
 - [ ] Change `build_sample_features()` to expose the exact
   `sample_data["atom_array_cropped"]` object and fail immediately if its atom
-  axis disagrees with `atom_mask` or ground-truth positions.
+  axis disagrees with `atom_mask`. Keep the existing post-alignment check for
+  ground-truth/prediction atom-axis equality.
 - [ ] Run the focused test and verify that it passes.
 
 ### Task 2: Raw Global Datapoint Sampling

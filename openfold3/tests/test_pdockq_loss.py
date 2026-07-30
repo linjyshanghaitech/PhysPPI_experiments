@@ -158,7 +158,7 @@ def test_per_candidate_dockq_derives_atomized_inputs_from_training_batch(monkeyp
     ]
     assert captured["asym_id_atomized"].tolist() == [[[1, 1, 2, 2], [1, 1, 2, 2]]]
     assert captured["res_id_atomized"].tolist() == [
-        [[10, 10, 20, 20], [10, 10, 20, 20]]
+        [[0, 0, 0, 0], [0, 0, 0, 0]]
     ]
     for name in (
         "is_protein_atomized",
@@ -173,3 +173,54 @@ def test_per_candidate_dockq_derives_atomized_inputs_from_training_batch(monkeyp
     assert valid.tolist() == [[True, True]]
     assert score.dtype == torch.float32
     assert not score.requires_grad
+
+
+def test_per_candidate_dockq_reindexes_negative_interleaved_and_padded_residues(
+    monkeypatch,
+):
+    import openfold3.core.loss.pdockq as module
+
+    captured = {}
+
+    def fake_dockq(**kwargs):
+        captured.update(kwargs)
+        return type(
+            "Result",
+            (),
+            {
+                "chain_pair_to_dockq": {
+                    (1, 2, 0): torch.tensor([0.9]),
+                }
+            },
+        )()
+
+    monkeypatch.setattr(module, "dockq", fake_dockq)
+
+    prediction = torch.randn(1, 1, 7, 3, dtype=torch.bfloat16, requires_grad=True)
+    batch = {
+        "atom_mask": torch.ones(1, 1, 7, dtype=torch.bool),
+        "token_mask": torch.tensor([[[1, 1, 1, 1, 1, 1, 1]]], dtype=torch.float32),
+        "num_atoms_per_token": torch.tensor([[[1, 1, 2, 1, 1, 1, 0]]]),
+        "asym_id": torch.tensor([[[1, 1, 1, 2, 2, 1, 0]]]),
+        "residue_index": torch.tensor([[[-4, -4, -3, 1, 1, 2, 99]]]),
+        "ref_atom_name_chars": torch.zeros(1, 1, 7, 4, 64),
+        "is_protein": torch.ones(1, 1, 7, dtype=torch.bool),
+        "is_rna": torch.zeros(1, 1, 7, dtype=torch.bool),
+        "is_dna": torch.zeros(1, 1, 7, dtype=torch.bool),
+        "is_atomized": torch.zeros(1, 1, 7, dtype=torch.bool),
+        "ground_truth": {
+            "atom_resolved_mask": torch.ones(1, 1, 7, dtype=torch.bool),
+            "inter_filter_atomized": torch.ones(1, 1, 7, 7, dtype=torch.bool),
+        },
+    }
+
+    score, valid = per_candidate_complex_dockq(
+        prediction=prediction,
+        gt=torch.zeros(1, 1, 7, 3, dtype=torch.bfloat16),
+        batch=batch,
+    )
+
+    assert captured["res_id_atomized"].tolist() == [[[0, 0, 1, 1, 0, 0, 2]]]
+    assert min(captured["res_id_atomized"].reshape(-1).tolist()) >= 0
+    torch.testing.assert_close(score, torch.tensor([[0.9]]))
+    assert valid.tolist() == [[True]]

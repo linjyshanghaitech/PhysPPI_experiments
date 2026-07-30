@@ -335,7 +335,34 @@ class TrainingExperimentRunner(ExperimentRunner):
         self.checkpoint_config = experiment_config.checkpoint_config
 
         self._validate_physppi_checkpoint_loading_policy()
+        # PhysPPI modification (Jinyu Lin, ShanghaiTech):
+        #   Ensure PhysPPI dataset classes are registered before
+        #   DataModule.init_datasets queries DATASET_REGISTRY.
+        #   This is required for ANY PhysPPI dataset (manifest or not)
+        #   because the core framework skips their auto-import.
+        if self._has_physppi_training():
+            self._ensure_physppi_dataset_registry()
         self.update_trainer_config()
+
+    @staticmethod
+    def _is_physppi_dataset_class(dataset_class: object) -> bool:
+        """Return True when *dataset_class* is a PhysPPI dataset name."""
+        return (
+            isinstance(dataset_class, str)
+            and dataset_class
+            in {"QBioLiP10kDataset", "AFDB10kDataset"}
+        )
+
+    def _has_physppi_training(self) -> bool:
+        """Return True when any training dataset is a PhysPPI dataset."""
+        train_specs = self.dataset_configs.get("train", {})
+        for spec in train_specs.values():
+            if not isinstance(spec, Mapping):
+                continue
+            ds_class = spec.get("dataset_class", "")
+            if self._is_physppi_dataset_class(ds_class):
+                return True
+        return False
 
     def _has_manifest_bound_physppi_training(self) -> bool:
         train_specs = self.dataset_configs.get("train", {})
@@ -349,6 +376,19 @@ class TrainingExperimentRunner(ExperimentRunner):
             if isinstance(physppi, Mapping) and physppi.get("manifest") is not None:
                 return True
         return False
+
+    @staticmethod
+    def _ensure_physppi_dataset_registry() -> None:
+        """Import PhysPPI single-dataset modules so they self-register.
+
+        PhysPPI modification (Jinyu Lin, ShanghaiTech):
+          prior_complex, afdb10k, and qbiolip10k are excluded from the
+          core framework auto-import to avoid a circular dependency.
+          They must be explicitly imported before DATASET_REGISTRY is
+          queried so the ``@register_dataset`` decorator fires.
+        """
+        import openfold3.core.data.framework.single_datasets.afdb10k  # noqa: F401
+        import openfold3.core.data.framework.single_datasets.qbiolip10k  # noqa: F401
 
     def _validate_physppi_checkpoint_loading_policy(self) -> None:
         """Separate manifest-bound PhysPPI cold starts from native resumes."""

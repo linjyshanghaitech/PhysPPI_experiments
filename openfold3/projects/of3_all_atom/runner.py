@@ -12,11 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import csv
 import gc
 import importlib
 import json
 import logging
 import os
+import shutil
+import time
 import traceback
 import warnings
 from contextlib import nullcontext
@@ -35,6 +38,7 @@ from openfold3.core.loss.pdockq import (
     dockq_to_soft_bins,
     per_candidate_complex_dockq,
 )
+from openfold3.core.metrics.confidence import compute_plddt
 from openfold3.core.metrics.aggregate_confidence_ranking import get_confidence_scores
 from openfold3.core.metrics.model_selection import (
     compute_final_model_selection_metric,
@@ -49,6 +53,7 @@ from openfold3.core.model.lora import (
     validate_lora_checkpoint_keys,
 )
 from openfold3.core.runners.model_runner import ModelRunner
+from openfold3.core.runners.writer import OF3OutputWriter
 from openfold3.core.utils.grad_manager import PerSampleGradManager, compute_global_norm
 from openfold3.core.utils.lr_schedulers import AlphaFoldLRScheduler
 from openfold3.core.utils.tensor_utils import tensor_tree_map
@@ -135,7 +140,39 @@ def sampler_trace_row(
     return row
 
 
-def _append_sampler_trace(path: Path, row: dict[str, int | float | str]) -> None:
+def apply_physppi_loss_weight(
+    batch: dict,
+    loss: torch.Tensor,
+    loss_breakdown: dict[str, torch.Tensor],
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Scale the complete rank-local PhysPPI loss after aggregation."""
+    configured_weight = batch.get("physppi_loss_weight")
+    if configured_weight is None:
+        return loss, loss_breakdown
+
+    weight = torch.as_tensor(
+        configured_weight,
+        device=loss.device,
+        dtype=loss.dtype,
+    )
+    if weight.numel() != 1:
+        raise ValueError(
+            "physppi_loss_weight must contain one scalar per rank-local sample"
+        )
+    weight = weight.reshape(())
+    if not torch.isfinite(weight) or weight <= 0:
+        raise ValueError("physppi_loss_weight must be finite and positive")
+
+    weighted_breakdown = {
+        name: value * weight.to(device=value.device, dtype=value.dtype)
+        for name, value in loss_breakdown.items()
+    }
+    return loss * weight, weighted_breakdown
+
+
+def _append_sampler_trace(
+    path: Path, row: dict[str, int | float | str | bool | None]
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = (json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n").encode()
     descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
@@ -144,6 +181,200 @@ def _append_sampler_trace(path: Path, row: dict[str, int | float | str]) -> None
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _finite_mean(value) -> float | None:
+    if not torch.is_tensor(value) or value.numel() == 0:
+        return None
+    scalar = value.detach().float().mean()
+    if not torch.isfinite(scalar):
+        return None
+    return float(scalar.cpu())
+
+
+def _single_bool(value) -> bool | None:
+    if value is None:
+        return None
+    tensor = torch.as_tensor(value).detach().bool().reshape(-1)
+    if tensor.numel() != 1:
+        return None
+    return bool(tensor.item())
+
+
+def _single_float(value) -> float | None:
+    if value is None:
+        return None
+    tensor = torch.as_tensor(value).detach().float().reshape(-1)
+    if tensor.numel() != 1 or not torch.isfinite(tensor).all():
+        return None
+    return round(float(tensor.item()), 6)
+
+
+def _config_value(config, name: str, default=None):
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(name, default)
+    if hasattr(config, "get"):
+        try:
+            return config.get(name, default)
+        except TypeError:
+            pass
+    return getattr(config, name, default)
+
+
+def _safe_path_component(value: str) -> str:
+    safe = [
+        character if character.isalnum() or character in "._-" else "_"
+        for character in value
+    ]
+    return "".join(safe) or "case"
+
+
+def _copy_validation_gt_pdb(
+    *,
+    batch: dict,
+    batch_index: int,
+    case_dir: Path,
+    safe_case_id: str,
+) -> str | None:
+    gt_paths = batch.get("physppi_gt_pdb_path")
+    if gt_paths is None:
+        return None
+    if not isinstance(gt_paths, (list, tuple)):
+        raise ValueError("physppi_gt_pdb_path must be a list when provided")
+    if batch_index >= len(gt_paths):
+        raise ValueError(
+            "physppi_gt_pdb_path length is smaller than validation batch size"
+        )
+    source_value = gt_paths[batch_index]
+    if source_value is None:
+        return None
+    source_path = Path(str(source_value))
+    if not source_path.is_file():
+        raise FileNotFoundError(
+            f"validation GT PDB does not exist for {safe_case_id}: {source_path}"
+        )
+    file_name = f"{safe_case_id}_gt.pdb"
+    shutil.copyfile(source_path, case_dir / file_name)
+    return file_name
+
+
+def _candidate_scalar(value, batch_index: int, sample_index: int) -> float | int | bool | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return None
+    if not torch.is_tensor(value):
+        try:
+            value = torch.as_tensor(value)
+        except (RuntimeError, TypeError, ValueError):
+            return None
+    tensor = value.detach()
+    if tensor.ndim >= 2:
+        if tensor.shape[0] <= batch_index or tensor.shape[1] <= sample_index:
+            return None
+        tensor = tensor[batch_index, sample_index]
+    elif tensor.ndim == 1:
+        if tensor.shape[0] <= sample_index:
+            return None
+        tensor = tensor[sample_index]
+    if tensor.numel() != 1:
+        return None
+    if tensor.dtype == torch.bool:
+        return bool(tensor.cpu().item())
+    scalar = tensor.float().cpu().reshape(())
+    if not torch.isfinite(scalar):
+        return None
+    return float(scalar.item())
+
+
+def _scalar_summary(value) -> float | int | bool | None:
+    if value is None:
+        return None
+    if not torch.is_tensor(value):
+        try:
+            value = torch.as_tensor(value)
+        except (TypeError, ValueError):
+            return None
+    tensor = value.detach()
+    if tensor.numel() == 0:
+        return None
+    if tensor.dtype == torch.bool and tensor.numel() == 1:
+        return bool(tensor.cpu().item())
+    tensor = tensor.float()
+    finite = torch.isfinite(tensor)
+    if not finite.any():
+        return None
+    return float(tensor[finite].mean().cpu().item())
+
+
+def write_physppi_route_c_train_metrics(
+    *,
+    path: Path,
+    batch: dict,
+    output: dict,
+    loss_breakdown: dict,
+    rank: int,
+    global_step: int,
+    epoch: int,
+) -> None:
+    """Append one rank-local case and its weighted loss breakdown atomically."""
+
+    sample_ids = batch.get("pdb_id")
+    if not isinstance(sample_ids, (list, tuple)) or len(sample_ids) != 1:
+        raise ValueError("PhysPPI loss logging requires one pdb_id per rank")
+    sample_id = str(sample_ids[0])
+    record: dict[str, int | float | str | bool | None] = {
+        "rank": int(rank),
+        "global_step": int(global_step),
+        "epoch": int(epoch),
+        "sample_id": sample_id,
+        "dataset": "afdb" if sample_id.startswith("AF-") else "qbiolip",
+        "dataset_loss_weight": _single_float(batch.get("physppi_loss_weight")),
+    }
+    for loss_name, loss_value in loss_breakdown.items():
+        metric_value = _finite_mean(loss_value)
+        if metric_value is not None:
+            record[f"train/{loss_name}"] = metric_value
+        elif loss_name == "loss":
+            record[f"train/{loss_name}"] = None
+    if "train/loss" not in record:
+        return
+
+    gt_valid = _single_bool(batch.get("physppi_membrane_gt_valid"))
+    prediction_valid = _single_bool(
+        output.get("physppi_predicted_membrane_valid")
+    )
+    tm_mask = batch.get("physppi_tm_token_mask")
+    valid_frame_count = output.get("physppi_membrane_valid_frame_count")
+    if gt_valid is not None:
+        record["membrane_gt_valid"] = gt_valid
+    if prediction_valid is not None:
+        record["membrane_prediction_valid"] = prediction_valid
+    if torch.is_tensor(tm_mask):
+        record["membrane_tm_token_count"] = int(
+            tm_mask.detach().bool().sum().cpu().item()
+        )
+    if torch.is_tensor(valid_frame_count) and valid_frame_count.numel() == 1:
+        record["membrane_valid_frame_count"] = int(
+            valid_frame_count.detach().reshape(()).cpu().item()
+        )
+
+    pdockq_target_mean = batch.get("physppi_pdockq_diag_target_mean")
+    pdockq_target_std = batch.get("physppi_pdockq_diag_target_std")
+    pdockq_valid_count = batch.get("physppi_pdockq_diag_valid_count")
+    pdockq_pred_mean = batch.get("physppi_pdockq_diag_pred_mean")
+    if pdockq_target_mean is not None:
+        record["pdockq_target_mean"] = float(pdockq_target_mean)
+    if pdockq_target_std is not None:
+        record["pdockq_target_std"] = float(pdockq_target_std)
+    if pdockq_valid_count is not None:
+        record["pdockq_valid_candidates"] = int(pdockq_valid_count)
+    if pdockq_pred_mean is not None:
+        record["pdockq_pred_mean"] = float(pdockq_pred_mean)
+
+    _append_sampler_trace(path, record)
 
 
 class OpenFold3AllAtom(ModelRunner):
@@ -285,17 +516,12 @@ class OpenFold3AllAtom(ModelRunner):
             )
 
     def _route_c_metric_value(self, value) -> float | None:
-        if not torch.is_tensor(value):
-            return None
-        if value.numel() == 0:
-            return None
-        scalar = value.detach().float().mean()
-        if not torch.isfinite(scalar):
-            return None
-        return float(scalar.cpu())
+        return _finite_mean(value)
 
     def _write_physppi_route_c_train_metrics(
         self,
+        batch,
+        output,
         loss_breakdown,
     ) -> None:
         if (
@@ -303,30 +529,19 @@ class OpenFold3AllAtom(ModelRunner):
             != "physppi_lora_assessment"
         ):
             return
-        if self.log_dir is None:
-            return
-        if self.trainer is None or not self.trainer.is_global_zero:
-            return
-
-        record = {
-            "global_step": int(self.trainer.global_step),
-            "epoch": int(self.trainer.current_epoch),
-        }
-        for loss_name, loss_value in loss_breakdown.items():
-            metric_value = self._route_c_metric_value(loss_value)
-            if metric_value is not None:
-                record[f"train/{loss_name}"] = metric_value
-            elif loss_name == "loss":
-                # Record non-finite loss as null for diagnostics
-                record[f"train/{loss_name}"] = None
-
-        if "train/loss" not in record:
+        if self.log_dir is None or self.trainer is None:
             return
 
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        metrics_path = self.log_dir / "physppi_route_c_train_metrics.jsonl"
-        with metrics_path.open("a") as fp:
-            fp.write(json.dumps(record, sort_keys=True) + "\n")
+        write_physppi_route_c_train_metrics(
+            path=self.log_dir / "physppi_route_c_train_metrics.jsonl",
+            batch=batch,
+            output=output,
+            loss_breakdown=loss_breakdown,
+            rank=self.global_rank,
+            global_step=self.trainer.global_step,
+            epoch=self.trainer.current_epoch,
+        )
 
     def _identify_confidence_params(self):
         """
@@ -430,6 +645,49 @@ class OpenFold3AllAtom(ModelRunner):
 
         metric_obj.update(*metric_value)
 
+    def _get_validation_metrics_detail(self, batch, outputs) -> tuple[dict, dict]:
+        num_samples = self.config.architecture.shared.diffusion.no_full_rollout_samples
+        num_atoms = outputs["atom_positions_predicted"].shape[-2]
+        chunk_metrics_computation = (
+            num_samples > 1
+            and self.config.settings.memory.eval.per_sample_atom_cutoff is not None
+            and num_atoms > self.config.settings.memory.eval.per_sample_atom_cutoff
+        )
+
+        if chunk_metrics_computation:
+            metrics_per_sample = get_metrics_chunked(
+                batch,
+                outputs,
+                compute_extra_val_metrics=True,
+            )
+        else:
+            metrics_per_sample = get_metrics(
+                batch,
+                outputs,
+                compute_extra_val_metrics=True,
+            )
+
+        metrics = compute_valid_model_selection_metrics(
+            confidence_config=self.config.confidence,
+            outputs=outputs,
+            metrics=metrics_per_sample,
+        )
+
+        for metric_name in CORRELATION_METRICS:
+            molecule_type = metric_name.split("_")[-1]
+            plddt_key = f"plddt_{molecule_type}"
+            lddt_key = f"lddt_intra_{molecule_type}"
+
+            plddt = metrics_per_sample.get(plddt_key)
+            lddt = metrics_per_sample.get(lddt_key)
+
+            if plddt is not None and lddt is not None:
+                plddt = plddt.reshape((-1, 1))
+                lddt = lddt.reshape((-1, 1))
+                metrics[metric_name] = (lddt, plddt)
+
+        return metrics, metrics_per_sample
+
     def _get_metrics(self, batch, outputs, train=True) -> dict:
         with torch.no_grad():
             if train:
@@ -440,56 +698,267 @@ class OpenFold3AllAtom(ModelRunner):
                     compute_extra_val_metrics=False,
                 )
 
-            num_samples = (
-                self.config.architecture.shared.diffusion.no_full_rollout_samples
-            )
-            num_atoms = outputs["atom_positions_predicted"].shape[-2]
-            chunk_metrics_computation = (
-                num_samples > 1
-                and self.config.settings.memory.eval.per_sample_atom_cutoff is not None
-                and num_atoms > self.config.settings.memory.eval.per_sample_atom_cutoff
-            )
-
-            if chunk_metrics_computation:
-                metrics_per_sample = get_metrics_chunked(
-                    batch,
-                    outputs,
-                    compute_extra_val_metrics=True,
-                )
-            else:
-                metrics_per_sample = get_metrics(
-                    batch,
-                    outputs,
-                    compute_extra_val_metrics=True,
-                )
-
-            metrics = compute_valid_model_selection_metrics(
-                confidence_config=self.config.confidence,
-                outputs=outputs,
-                metrics=metrics_per_sample,
-            )
-
-            for metric_name in CORRELATION_METRICS:
-                molecule_type = metric_name.split("_")[-1]
-                plddt_key = f"plddt_{molecule_type}"
-                lddt_key = f"lddt_intra_{molecule_type}"
-
-                plddt = metrics_per_sample.get(plddt_key)
-                lddt = metrics_per_sample.get(lddt_key)
-
-                if plddt is not None and lddt is not None:
-                    plddt = plddt.reshape((-1, 1))
-                    lddt = lddt.reshape((-1, 1))
-                    metrics[metric_name] = (lddt, plddt)
-
+            metrics, _ = self._get_validation_metrics_detail(batch, outputs)
             return metrics
 
+    def _validation_artifact_config(self):
+        return _config_value(self.config.settings, "validation_artifacts", {})
+
+    def _validation_artifacts_enabled(self) -> bool:
+        return bool(_config_value(self._validation_artifact_config(), "enabled", False))
+
+    def _synchronize_validation_timing(self) -> None:
+        artifact_config = self._validation_artifact_config()
+        should_sync = bool(
+            _config_value(artifact_config, "synchronize_cuda_timing", False)
+        )
+        if should_sync and torch.cuda.is_available():
+            torch.cuda.synchronize()
+
+    def _compute_validation_artifact_confidence_scores(
+        self,
+        batch: dict,
+        outputs: dict,
+    ) -> dict[str, torch.Tensor]:
+        confidence_scores: dict[str, torch.Tensor] = {}
+        if "plddt_logits" in outputs:
+            confidence_scores["plddt"] = compute_plddt(outputs["plddt_logits"]) * 100.0
+
+        pdockq_logits = outputs.get("pdockq_logits")
+        if pdockq_logits is not None:
+            if "pdockq_expectation" in outputs:
+                confidence_scores["pdockq"] = outputs["pdockq_expectation"]
+            elif pdockq_logits.shape[-1] == 1:
+                confidence_scores["pdockq"] = pdockq_logits.squeeze(-1)
+            else:
+                probs = torch.softmax(pdockq_logits, dim=-1)
+                bins = torch.linspace(
+                    0.0,
+                    1.0,
+                    probs.shape[-1],
+                    device=probs.device,
+                    dtype=probs.dtype,
+                )
+                confidence_scores["pdockq"] = torch.sum(probs * bins, dim=-1)
+
+        return confidence_scores
+
+    def _write_validation_artifacts(
+        self,
+        *,
+        batch: dict,
+        outputs: dict,
+        metrics_per_sample: dict,
+        confidence_scores: dict,
+        loss_breakdown: dict,
+        batch_idx: int,
+        dataloader_idx: int,
+        timing: dict[str, float] | None = None,
+    ) -> None:
+        artifact_config = self._validation_artifact_config()
+        if not bool(_config_value(artifact_config, "enabled", False)):
+            return
+
+        start = time.perf_counter()
+        output_dir = _config_value(artifact_config, "output_dir", None)
+        if output_dir is None:
+            if self.log_dir is None:
+                raise RuntimeError("validation artifact export requires log_dir")
+            output_root = Path(self.log_dir).parent / "validation_artifacts"
+        else:
+            output_root = Path(output_dir)
+
+        structure_format = str(
+            _config_value(artifact_config, "structure_format", "pdb")
+        )
+        positions = outputs["atom_positions_predicted"]
+        batch_size = int(positions.shape[0])
+        num_candidates = int(positions.shape[1])
+        expected_samples = _config_value(artifact_config, "expected_samples", None)
+        if expected_samples is not None and num_candidates != int(expected_samples):
+            message = (
+                "validation artifact sample count mismatch: "
+                f"expected {int(expected_samples)}, got {num_candidates}"
+            )
+            if bool(
+                _config_value(
+                    artifact_config,
+                    "fail_on_sample_count_mismatch",
+                    True,
+                )
+            ):
+                raise ValueError(message)
+            logger.warning(message)
+
+        sample_ids = batch.get("pdb_id") or batch.get("query_id")
+        if not isinstance(sample_ids, (list, tuple)):
+            raise ValueError("validation artifact export requires pdb_id/query_id list")
+        atom_arrays = batch.get("atom_array")
+        if not isinstance(atom_arrays, (list, tuple)):
+            raise ValueError("validation artifact export requires atom_array list")
+
+        for batch_index in range(batch_size):
+            case_id = str(sample_ids[batch_index])
+            safe_case_id = _safe_path_component(case_id)
+            case_dir = output_root / f"dataloader_{dataloader_idx}" / safe_case_id
+            case_dir.mkdir(parents=True, exist_ok=True)
+            gt_structure_file = _copy_validation_gt_pdb(
+                batch=batch,
+                batch_index=batch_index,
+                case_dir=case_dir,
+                safe_case_id=safe_case_id,
+            )
+
+            atom_array = atom_arrays[batch_index]
+            candidate_rows: list[dict[str, object]] = []
+            for sample_index in range(num_candidates):
+                file_name = (
+                    f"{safe_case_id}_candidate_{sample_index + 1:02d}."
+                    f"{structure_format}"
+                )
+                output_file = case_dir / file_name
+                predicted_coords = (
+                    positions[batch_index, sample_index]
+                    .detach()
+                    .cpu()
+                    .float()
+                    .numpy()
+                )
+                plddt = confidence_scores.get("plddt")
+                if plddt is None:
+                    plddt_np = np.zeros(predicted_coords.shape[0], dtype=np.float32)
+                else:
+                    plddt_np = (
+                        plddt[batch_index, sample_index]
+                        .detach()
+                        .cpu()
+                        .float()
+                        .numpy()
+                    )
+
+                OF3OutputWriter.write_structure_prediction(
+                    atom_array=atom_array.copy(),
+                    predicted_coords=predicted_coords,
+                    plddt=plddt_np,
+                    output_file=output_file,
+                )
+
+                row: dict[str, object] = {
+                    "case_id": case_id,
+                    "dataloader_idx": int(dataloader_idx),
+                    "batch_idx": int(batch_idx),
+                    "rank": int(self.global_rank),
+                    "candidate_index": int(sample_index + 1),
+                    "structure_file": file_name,
+                }
+                for name, value in metrics_per_sample.items():
+                    scalar = _candidate_scalar(value, batch_index, sample_index)
+                    if scalar is not None:
+                        row[name] = scalar
+                for name, value in confidence_scores.items():
+                    scalar = _candidate_scalar(value, batch_index, sample_index)
+                    if scalar is not None:
+                        row[f"confidence/{name}"] = scalar
+                target_score = _candidate_scalar(
+                    batch.get("physppi_pdockq_target_score"),
+                    batch_index,
+                    sample_index,
+                )
+                target_valid = _candidate_scalar(
+                    batch.get("physppi_pdockq_valid"),
+                    batch_index,
+                    sample_index,
+                )
+                if target_score is not None:
+                    row["target/pdockq"] = target_score
+                if target_valid is not None:
+                    row["target/pdockq_valid"] = target_valid
+                candidate_rows.append(row)
+
+            base_fields = [
+                "case_id",
+                "dataloader_idx",
+                "batch_idx",
+                "rank",
+                "candidate_index",
+                "structure_file",
+            ]
+            dynamic_fields = sorted(
+                {
+                    key
+                    for row in candidate_rows
+                    for key in row.keys()
+                    if key not in base_fields
+                }
+            )
+            with (case_dir / "candidate_metrics.csv").open(
+                "w", newline=""
+            ) as handle:
+                writer = csv.DictWriter(
+                    handle, fieldnames=[*base_fields, *dynamic_fields]
+                )
+                writer.writeheader()
+                writer.writerows(candidate_rows)
+
+            case_timing = dict(timing or {})
+            case_timing["artifact_write_seconds"] = time.perf_counter() - start
+            summary = {
+                "case_id": case_id,
+                "dataloader_idx": int(dataloader_idx),
+                "batch_idx": int(batch_idx),
+                "rank": int(self.global_rank),
+                "global_step": int(self.global_step),
+                "num_candidates": num_candidates,
+                "num_atoms": int(positions.shape[-2]),
+                "loss_breakdown": {
+                    name: _scalar_summary(value)
+                    for name, value in loss_breakdown.items()
+                },
+                "timing": case_timing,
+            }
+            if gt_structure_file is not None:
+                summary["gt_structure_file"] = gt_structure_file
+            (case_dir / "case_summary.json").write_text(
+                json.dumps(summary, indent=2, sort_keys=True)
+            )
+
+            if bool(_config_value(artifact_config, "profile_timing", False)):
+                timing_path = (
+                    Path(self.log_dir)
+                    / "evidence"
+                    / "validation_artifacts"
+                    / f"rank-{self.global_rank}.jsonl"
+                )
+                _append_sampler_trace(
+                    timing_path,
+                    {
+                        "case_id": case_id,
+                        "dataloader_idx": int(dataloader_idx),
+                        "batch_idx": int(batch_idx),
+                        "rank": int(self.global_rank),
+                        "global_step": int(self.global_step),
+                        "num_candidates": num_candidates,
+                        "num_atoms": int(positions.shape[-2]),
+                        **case_timing,
+                    },
+                )
+
     def _log(
-        self, loss_breakdown, batch, outputs, train=True, log_train_step_metrics=True
+        self,
+        loss_breakdown,
+        batch,
+        outputs,
+        train=True,
+        log_train_step_metrics=True,
+        metrics_override=None,
     ):
         phase = "train" if train else "val"
 
-        metrics = self._get_metrics(batch, outputs, train=train)
+        metrics = (
+            metrics_override
+            if metrics_override is not None
+            else self._get_metrics(batch, outputs, train=train)
+        )
 
         loss_collection = self.train_losses if phase == "train" else self.val_losses
         for loss_name, indiv_loss in loss_breakdown.items():
@@ -538,8 +1007,8 @@ class OpenFold3AllAtom(ModelRunner):
                     sync_dist=False,
                 )
 
-        if train and log_train_step_metrics:
-            self._write_physppi_route_c_train_metrics(loss_breakdown)
+        if train:
+            self._write_physppi_route_c_train_metrics(batch, outputs, loss_breakdown)
 
     def _is_opt_step_ready(self, batch_idx: int) -> bool:
         """
@@ -635,6 +1104,11 @@ class OpenFold3AllAtom(ModelRunner):
 
                 # Compute loss
                 loss, loss_breakdown = self.loss(batch, outputs, _return_breakdown=True)
+                loss, loss_breakdown = apply_physppi_loss_weight(
+                    batch,
+                    loss,
+                    loss_breakdown,
+                )
 
                 self.manual_backward(loss)
 
@@ -733,6 +1207,11 @@ class OpenFold3AllAtom(ModelRunner):
 
             # Compute loss
             loss, loss_breakdown = self.loss(batch, outputs, _return_breakdown=True)
+            loss, loss_breakdown = apply_physppi_loss_weight(
+                batch,
+                loss,
+                loss_breakdown,
+            )
 
             self._log(loss_breakdown, batch, outputs)
 
@@ -757,22 +1236,35 @@ class OpenFold3AllAtom(ModelRunner):
             != PHYSPPI_TRAINING_SCOPE
         ):
             return
-        required_outputs = ("atom_positions_diffusion", "pdockq_logits")
-        for key in required_outputs:
-            if key not in outputs:
-                raise KeyError(f"{key} is required for PhysPPI pDockQ supervision")
+        prediction_key = (
+            "atom_positions_diffusion"
+            if "atom_positions_diffusion" in outputs
+            else "atom_positions_predicted"
+        )
+        if prediction_key not in outputs:
+            raise KeyError(
+                "atom_positions_diffusion or atom_positions_predicted is required "
+                "for PhysPPI pDockQ supervision"
+            )
+        if "pdockq_logits" not in outputs:
+            raise KeyError("pdockq_logits is required for PhysPPI pDockQ supervision")
         ground_truth = batch.get("ground_truth")
         if not isinstance(ground_truth, dict):
             raise KeyError("ground_truth is required for PhysPPI pDockQ supervision")
         if "atom_positions" not in ground_truth:
             raise KeyError("atom_positions is required for PhysPPI pDockQ supervision")
-        prediction = outputs["atom_positions_diffusion"]
+        prediction = outputs[prediction_key]
         logits = outputs["pdockq_logits"]
-        if logits.shape[:-1] != prediction.shape[:2] or logits.shape[-1] != 50:
+        num_bins = logits.shape[-1]
+        if logits.shape[:-1] != prediction.shape[:2]:
             raise ValueError(
-                "pDockQ logits must have shape (batch, candidates, 50) matching "
-                f"candidate coordinates, got {tuple(logits.shape)} and "
-                f"{tuple(prediction.shape)}"
+                "pDockQ logits batch/candidate dims must match coordinates, "
+                f"got {tuple(logits.shape)} vs {tuple(prediction.shape)}"
+            )
+        if num_bins not in (1, 50):
+            raise ValueError(
+                f"pDockQ logits last dim must be 1 (regression) or 50 "
+                f"(classification), got {num_bins}"
             )
         with torch.no_grad():
             scores, valid = per_candidate_complex_dockq(
@@ -780,11 +1272,26 @@ class OpenFold3AllAtom(ModelRunner):
                 gt=ground_truth["atom_positions"],
                 batch=batch,
             )
-            target = dockq_to_soft_bins(scores, no_bins=50)
-            target = target * valid.unsqueeze(-1).to(dtype=target.dtype)
+            if num_bins == 50:
+                target = dockq_to_soft_bins(scores, no_bins=50)
+                target = target * valid.unsqueeze(-1).to(dtype=target.dtype)
+            else:
+                target = scores.unsqueeze(-1)
         batch["physppi_pdockq_target_score"] = scores
         batch["physppi_pdockq_valid"] = valid
         batch["physppi_pdockq_target"] = target
+        batch["physppi_pdockq_diag_target_mean"] = (
+            scores[valid].mean().item() if valid.any() else float("nan")
+        )
+        batch["physppi_pdockq_diag_target_std"] = (
+            scores[valid].std().item() if valid.any() else float("nan")
+        )
+        batch["physppi_pdockq_diag_valid_count"] = int(valid.sum().item())
+        expectation = outputs.get("pdockq_expectation")
+        if expectation is not None and valid.any():
+            batch["physppi_pdockq_diag_pred_mean"] = (
+                expectation[valid].mean().item()
+            )
 
     def training_step(self, batch, batch_idx):
         if (
@@ -814,7 +1321,7 @@ class OpenFold3AllAtom(ModelRunner):
 
         return self._training_step(batch=batch)
 
-    def eval_step(self, batch, batch_idx):
+    def eval_step(self, batch, batch_idx, dataloader_idx=0):
         pdb_id = batch["pdb_id"]
         is_repeated_sample = batch.get("repeated_sample")
         if is_repeated_sample:
@@ -830,13 +1337,70 @@ class OpenFold3AllAtom(ModelRunner):
         )
 
         try:
+            timing: dict[str, float] = {}
+            profile_timing = self._validation_artifacts_enabled()
+
             # Run the model
+            self._synchronize_validation_timing()
+            section_start = time.perf_counter()
             batch, outputs = self(batch)
+            self._synchronize_validation_timing()
+            if profile_timing:
+                timing["forward_seconds"] = time.perf_counter() - section_start
+
+            self._synchronize_validation_timing()
+            section_start = time.perf_counter()
+            self._populate_physppi_pdockq_targets(batch, outputs)
+            self._synchronize_validation_timing()
+            if profile_timing:
+                timing["pdockq_target_seconds"] = time.perf_counter() - section_start
 
             # Compute loss and other metrics
+            self._synchronize_validation_timing()
+            section_start = time.perf_counter()
             _, loss_breakdown = self.loss(batch, outputs, _return_breakdown=True)
+            self._synchronize_validation_timing()
+            if profile_timing:
+                timing["loss_seconds"] = time.perf_counter() - section_start
 
-            self._log(loss_breakdown, batch, outputs, train=False)
+            self._synchronize_validation_timing()
+            section_start = time.perf_counter()
+            metrics, metrics_per_sample = self._get_validation_metrics_detail(
+                batch, outputs
+            )
+            self._synchronize_validation_timing()
+            if profile_timing:
+                timing["metrics_seconds"] = time.perf_counter() - section_start
+
+            self._log(
+                loss_breakdown,
+                batch,
+                outputs,
+                train=False,
+                metrics_override=metrics,
+            )
+
+            if self._validation_artifacts_enabled():
+                self._synchronize_validation_timing()
+                section_start = time.perf_counter()
+                confidence_scores = (
+                    self._compute_validation_artifact_confidence_scores(
+                        batch,
+                        outputs,
+                    )
+                )
+                self._synchronize_validation_timing()
+                timing["confidence_seconds"] = time.perf_counter() - section_start
+                self._write_validation_artifacts(
+                    batch=batch,
+                    outputs=outputs,
+                    metrics_per_sample=metrics_per_sample,
+                    confidence_scores=confidence_scores,
+                    loss_breakdown=loss_breakdown,
+                    batch_idx=batch_idx,
+                    dataloader_idx=dataloader_idx,
+                    timing=timing,
+                )
 
         except Exception:
             logger.exception(f"Validation step failed with pdb id {', '.join(pdb_id)}")
@@ -844,6 +1408,10 @@ class OpenFold3AllAtom(ModelRunner):
 
     def on_validation_epoch_start(self):
         # At the start of validation, load the EMA weights
+        if not bool(
+            _config_value(self.config.settings, "validation_use_ema_weights", True)
+        ):
+            return
 
         assert self.cached_weights is None
 
@@ -854,7 +1422,7 @@ class OpenFold3AllAtom(ModelRunner):
             lambda t: t.detach().clone(), self.model.state_dict()
         )
 
-        self.model.load_state_dict(self.ema.state_dict()["params"])
+        self.model.load_state_dict(self.ema.state_dict()["params"], strict=False)
 
     def on_before_optimizer_step(self, *args, **kwargs):
         """
@@ -1091,8 +1659,9 @@ class OpenFold3AllAtom(ModelRunner):
         self._log_epoch_metrics(metrics=self.val_metrics, compute_model_selection=True)
 
         # Restore the model weights to normal
-        self.model.load_state_dict(self.cached_weights)
-        self.cached_weights = None
+        if self.cached_weights is not None:
+            self.model.load_state_dict(self.cached_weights)
+            self.cached_weights = None
 
         # Temp fix for val dataloader worker seg fault issues
         # TODO: Figure out why this is not being cleaned up properly

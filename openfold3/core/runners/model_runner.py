@@ -124,7 +124,7 @@ class ModelRunner(pl.LightningModule):
         if is_last_step_of_cycle or self.trainer.is_last_batch:
             self.ema.update(self.model)
 
-    def eval_step(self, batch, batch_idx):
+    def eval_step(self, batch, batch_idx, dataloader_idx=0):
         # At the start of validation, load the EMA weights
         if self.cached_weights is None:
             # model.state_dict() contains references to model weights rather
@@ -146,11 +146,11 @@ class ModelRunner(pl.LightningModule):
 
         self._log(loss_breakdown, batch, outputs, train=False)
 
-    def validation_step(self, batch, batch_idx):
-        self.eval_step(batch, batch_idx)
+    def validation_step(self, batch, batch_idx, dataloader_idx=0):
+        self.eval_step(batch, batch_idx, dataloader_idx=dataloader_idx)
 
-    def test_step(self, batch, batch_idx):
-        self.eval_step(batch, batch_idx)
+    def test_step(self, batch, batch_idx, dataloader_idx=0):
+        self.eval_step(batch, batch_idx, dataloader_idx=dataloader_idx)
 
     def predict_step(self, batch, batch_idx):
         # TODO implement

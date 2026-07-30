@@ -13,10 +13,24 @@
 # limitations under the License.
 from pathlib import Path
 
+# PhysPPI modification (Jinyu Lin, ShanghaiTech):
+#   prior_complex, afdb10k, and qbiolip10k live in single_datasets/ but
+#   import from openfold3.projects.of3_all_atom.physppi.data.adapters.
+#   Auto-importing them during core framework init creates a circular
+#   dependency: adapters → _runtime → base_of3 → framework init →
+#   afdb10k → prior_complex → adapters (still initializing).
+#   These modules are imported on demand by the PhysPPI training entry
+#   point and register themselves with DATASET_REGISTRY at that time.
+_PHYSPPI_SINGLE_DATASET_MODULES = frozenset(
+    {"prior_complex", "afdb10k", "qbiolip10k"}
+)
+
 
 def _import_all_py_files_from_dir(directory: Path):
     """Imports all Python files in the specified directory."""
     for path in directory.glob("*.py"):  # Finds all `.py` files
+        if path.stem in _PHYSPPI_SINGLE_DATASET_MODULES:
+            continue
         __import__(".".join(list(path.parts[-6:-1]) + [path.parts[-1].split(".")[0]]))
     return
 

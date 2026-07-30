@@ -19,6 +19,7 @@ import torch
 TOKEN_DIM_INDEX_MAP = {
     "residue_index": [-1],
     "token_index": [-1],
+    "crop_segment_id": [-1],
     "asym_id": [-1],
     "entity_id": [-1],
     "sym_id": [-1],

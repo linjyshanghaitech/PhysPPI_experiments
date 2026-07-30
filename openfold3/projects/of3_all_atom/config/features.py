@@ -27,6 +27,7 @@ feature_dict = mlc.ConfigDict(
         "feat": {
             "residue_index": [NUM_TOKENS],
             "token_index": [NUM_TOKENS],
+            "crop_segment_id": [NUM_TOKENS],
             "asym_id": [NUM_TOKENS],
             "entity_id": [NUM_TOKENS],
             "sym_id": [NUM_TOKENS],

@@ -59,8 +59,8 @@ class OpenFold3Loss(nn.Module):
 
         # pDockQ supervision is optional at the batch boundary because legacy
         # datasets do not provide candidate DockQ targets.  When present, both
-        # distribution and within-complex ranking losses retain the candidate
-        # axis and mask invalid/no-interface candidates.
+        # distribution (50-bin CE) or regression (MSE) and within-complex
+        # ranking losses retain the candidate axis and mask invalid candidates.
         pdockq_logits = output.get("pdockq_logits")
         pdockq_target = batch.get("physppi_pdockq_target")
         pdockq_valid = batch.get("physppi_pdockq_valid")
@@ -69,13 +69,28 @@ class OpenFold3Loss(nn.Module):
             and pdockq_target is not None
             and pdockq_valid is not None
         ):
-            l_pdockq = pdockq_distribution_loss(
-                pdockq_logits,
-                pdockq_target.to(
+            if pdockq_logits.shape[-1] == 50:
+                l_pdockq = pdockq_distribution_loss(
+                    pdockq_logits,
+                    pdockq_target.to(
+                        device=pdockq_logits.device, dtype=pdockq_logits.dtype
+                    ),
+                    pdockq_valid.to(device=pdockq_logits.device),
+                )
+            else:
+                expectation = output.get("pdockq_expectation")
+                target_score = batch["physppi_pdockq_target_score"].to(
                     device=pdockq_logits.device, dtype=pdockq_logits.dtype
-                ),
-                pdockq_valid.to(device=pdockq_logits.device),
-            )
+                )
+                valid_f = pdockq_valid.to(
+                    device=pdockq_logits.device, dtype=pdockq_logits.dtype
+                )
+                if expectation is not None:
+                    se = (expectation - target_score) ** 2
+                    l_pdockq = (se * valid_f).sum() / valid_f.sum().clamp_min(1.0)
+                else:
+                    se = (pdockq_logits.squeeze(-1) - target_score) ** 2
+                    l_pdockq = (se * valid_f).sum() / valid_f.sum().clamp_min(1.0)
             expectation = output.get("pdockq_expectation")
             if expectation is not None:
                 l_pdockq = l_pdockq + pdockq_pairwise_ranking_loss(
@@ -90,26 +105,55 @@ class OpenFold3Loss(nn.Module):
 
         if "physppi_membrane_gt_normal" in batch:
             membrane_cfg = self.config.get("membrane", {})
-            l_membrane = directed_membrane_plane_loss(
-                batch=batch,
-                output=output,
-                **membrane_cfg,
+            membrane_include_in_total = membrane_cfg.get(
+                "include_in_total_loss",
+                True,
             )
+            membrane_loss_kwargs = {
+                name: value
+                for name, value in membrane_cfg.items()
+                if name != "include_in_total_loss"
+            }
+            if membrane_include_in_total:
+                l_membrane = directed_membrane_plane_loss(
+                    batch=batch,
+                    output=output,
+                    **membrane_loss_kwargs,
+                )
+                cum_loss = cum_loss + l_membrane
+            else:
+                with torch.no_grad():
+                    l_membrane = directed_membrane_plane_loss(
+                        batch=batch,
+                        output=output,
+                        **membrane_loss_kwargs,
+                    )
             losses["membrane_plane_loss"] = l_membrane.detach().clone()
-            cum_loss = cum_loss + l_membrane
 
         interaction_prediction = output.get("interaction_distance_pred")
         if interaction_prediction is not None and (
             "physppi_interaction_aux_valid" in batch
         ):
             interaction_cfg = self.config.get("interaction_auxiliary", {})
-            l_interaction = interaction_auxiliary_loss(
-                batch=batch,
-                output=output,
-                distance_weight=interaction_cfg.get("distance_weight", 1.0),
+            interaction_include_in_total = interaction_cfg.get(
+                "include_in_total_loss",
+                True,
             )
+            if interaction_include_in_total:
+                l_interaction = interaction_auxiliary_loss(
+                    batch=batch,
+                    output=output,
+                    distance_weight=interaction_cfg.get("distance_weight", 1.0),
+                )
+                cum_loss = cum_loss + l_interaction
+            else:
+                with torch.no_grad():
+                    l_interaction = interaction_auxiliary_loss(
+                        batch=batch,
+                        output=output,
+                        distance_weight=interaction_cfg.get("distance_weight", 1.0),
+                    )
             losses["interaction_auxiliary_loss"] = l_interaction.detach().clone()
-            cum_loss = cum_loss + l_interaction
 
         # Weighted in confidence_loss()
         cum_loss = cum_loss + l_confidence

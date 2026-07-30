@@ -1,0 +1,242 @@
+experiment_settings:
+  mode: eval
+  output_dir: experiments/_runtime/8gpu_model_v2_fixed_crop_pdockq_auxlog_20260730_smoke80/validation10_eval
+  seed: 42
+  restart_checkpoint_path: /101045/jinyu/PhysPPI_jinyu/PhysPPI/experiments/_runtime/8gpu_model_v2_fixed_crop_pdockq_auxlog_20260730_smoke80/_aborted_attempts/pre_val_cap_20260730/checkpoint/step-000050.ckpt
+  preemption_safe_resume: false
+  ckpt_load_settings:
+    manual_checkpoint_loading: true
+    init_from_ema_weights: false
+    restore_lr_scheduler: false
+    restore_time_step: false
+    strict_loading: true
+data_module_args:
+  batch_size: 1
+  num_workers: 0
+  epoch_len: 4096
+  data_seed: 42
+  pin_memory: true
+  distinct_samples_per_rank_group: false
+  global_datapoint_sampling: true
+logging_config:
+  log_lr: true
+  log_level: error
+pl_trainer_args:
+  devices: 1
+  num_nodes: 1
+  precision: bf16-mixed
+  log_every_n_steps: 1
+  accumulate_grad_batches: 1
+  limit_val_batches: 1.0
+  num_sanity_val_steps: 0
+checkpoint_config:
+  dirpath: experiments/_runtime/8gpu_model_v2_fixed_crop_pdockq_auxlog_20260730_smoke80/validation10_eval/checkpoint
+  filename: step-{step:06d}
+  every_n_epochs: 0
+  every_n_train_steps: 50
+  save_on_train_epoch_end: false
+  save_top_k: -1
+  save_last: true
+  auto_insert_metric_name: false
+model_update:
+  presets:
+  - train
+  custom:
+    settings:
+      training_scope: physppi_lora_assessment
+      train_confidence_only: false
+      memory:
+        eval:
+          use_deepspeed_evo_attention: false
+      validation_use_ema_weights: false
+    architecture:
+      loss_module:
+        membrane:
+          include_in_total_loss: false
+        interaction_auxiliary:
+          include_in_total_loss: false
+      heads:
+        pdockq:
+          head_module: /101045/jinyu/PhysPPI_jinyu/PhysPPI/experiments/_runtime/4gpu_model_v1/pdockq_head_v1.py
+      physppi:
+        enabled: true
+        optional_prior_conditioner:
+          enabled: true
+          num_interaction_types: 5
+        membrane_geometry:
+          enabled: true
+          normal_error_bins: 16
+          depth_cutoff: 30.0
+      shared:
+        diffusion:
+          no_samples: 24
+dataset_configs:
+  train:
+    qbiolip_train:
+      dataset_class: QBioLiP10kDataset
+      weight: 0.5
+      config:
+        debug_mode: false
+        template:
+          n_templates: 4
+          take_top_k: false
+        crop:
+          token_crop:
+            enabled: true
+            token_budget: 768
+            crop_weights:
+              contiguous: 0.0
+              spatial: 0.5
+              spatial_interface: 0.5
+          chain_crop:
+            enabled: true
+        physppi:
+          root: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/Q-BioLiP-10k-new
+          num_surface_neighbors: 64
+          index_cache_file: /101045/jinyu/PhysPPI_jinyu/PhysPPI/experiments/_runtime/cache/qbiolip_index.json
+          sample_ids:
+          - 1a0s_1
+          loss_weight: 1.0
+        loss:
+          confidence_loss_names:
+          - plddt
+          - pde
+          - pae
+          loss_weights:
+            experimentally_resolved: 0.0
+            pde: 0.0001
+    afdb_train:
+      dataset_class: AFDB10kDataset
+      weight: 0.5
+      config:
+        debug_mode: false
+        template:
+          n_templates: 4
+          take_top_k: false
+        crop:
+          token_crop:
+            enabled: true
+            token_budget: 768
+            crop_weights:
+              contiguous: 0.0
+              spatial: 0.5
+              spatial_interface: 0.5
+          chain_crop:
+            enabled: true
+        physppi:
+          root: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/AFDB-10k-1
+          num_surface_neighbors: 64
+          index_cache_file: /101045/jinyu/PhysPPI_jinyu/PhysPPI/experiments/_runtime/cache/afdb_index.json
+          sample_ids:
+          - AF-0000000065760191-model_v1
+          loss_weight: 0.8
+        loss:
+          confidence_loss_names:
+          - plddt
+          - pde
+          - pae
+          loss_weights:
+            experimentally_resolved: 0.0
+            pde: 0.0001
+  validation:
+    qbiolip_val:
+      dataset_class: QBioLiP10kDataset
+      weight: 1.0
+      config:
+        debug_mode: false
+        template:
+          n_templates: 4
+          take_top_k: false
+        crop:
+          token_crop:
+            enabled: true
+            token_budget: 768
+            crop_weights:
+              contiguous: 0.0
+              spatial: 0.5
+              spatial_interface: 0.5
+          chain_crop:
+            enabled: true
+        physppi:
+          root: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/Q-BioLiP-10k-new
+          num_surface_neighbors: 64
+          index_cache_file: /101045/jinyu/PhysPPI_jinyu/PhysPPI/experiments/_runtime/cache/qbiolip_index.json
+          sample_ids:
+          - 1aig_1
+          - 1aig_2
+          - 1aij_1
+          - 1aij_2
+          - 1at9_1
+        loss:
+          confidence_loss_names:
+          - plddt
+          - pde
+          - pae
+          loss_weights:
+            experimentally_resolved: 0.0
+            pde: 0.0001
+    afdb_val:
+      dataset_class: AFDB10kDataset
+      weight: 1.0
+      config:
+        debug_mode: false
+        template:
+          n_templates: 4
+          take_top_k: false
+        crop:
+          token_crop:
+            enabled: true
+            token_budget: 768
+            crop_weights:
+              contiguous: 0.0
+              spatial: 0.5
+              spatial_interface: 0.5
+          chain_crop:
+            enabled: true
+        physppi:
+          root: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/AFDB-10k-1
+          num_surface_neighbors: 64
+          index_cache_file: /101045/jinyu/PhysPPI_jinyu/PhysPPI/experiments/_runtime/cache/afdb_index.json
+          sample_ids:
+          - AF-0000000065760170-model_v1
+          - AF-0000000065777121-model_v1
+          - AF-0000000065777139-model_v1
+          - AF-0000000065777161-model_v1
+          - AF-0000000065777168-model_v1
+        loss:
+          confidence_loss_names:
+          - plddt
+          - pde
+          - pae
+          loss_weights:
+            experimentally_resolved: 0.0
+            pde: 0.0001
+dataset_paths:
+  qbiolip_train:
+    dataset_cache_file: /101045/jinyu/PhysPPI_jinyu/PhysPPI/experiments/_runtime/4gpu_model_v1/cache/precomputed_physppi_dataset_cache.json
+    alignments_directory: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/Q-BioLiP-10k-new
+    target_structures_directory: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/Q-BioLiP-10k-new
+    target_structure_file_format: npz
+    reference_molecule_directory: /101045/jinyu/PhysPPI_jinyu/PhysPPI/openfold3/core/data/resources/canonical_protein_data/reference_mols
+    ccd_file: /101045/jinyu/PhysPPI_jinyu/PhysPPI/experiments/_runtime/assets/ccd/components.cif
+  afdb_train:
+    dataset_cache_file: /101045/jinyu/PhysPPI_jinyu/PhysPPI/experiments/_runtime/4gpu_model_v1/cache/precomputed_physppi_dataset_cache.json
+    alignments_directory: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/AFDB-10k-1
+    target_structures_directory: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/AFDB-10k-1
+    target_structure_file_format: npz
+    reference_molecule_directory: /101045/jinyu/PhysPPI_jinyu/PhysPPI/openfold3/core/data/resources/canonical_protein_data/reference_mols
+    ccd_file: /101045/jinyu/PhysPPI_jinyu/PhysPPI/experiments/_runtime/assets/ccd/components.cif
+  qbiolip_val:
+    dataset_cache_file: /101045/jinyu/PhysPPI_jinyu/PhysPPI/experiments/_runtime/4gpu_model_v1/cache/precomputed_physppi_dataset_cache.json
+    alignments_directory: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/Q-BioLiP-10k-new
+    target_structures_directory: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/Q-BioLiP-10k-new
+    target_structure_file_format: npz
+    reference_molecule_directory: /101045/jinyu/PhysPPI_jinyu/PhysPPI/openfold3/core/data/resources/canonical_protein_data/reference_mols
+    ccd_file: /101045/jinyu/PhysPPI_jinyu/PhysPPI/experiments/_runtime/assets/ccd/components.cif
+  afdb_val:
+    dataset_cache_file: /101045/jinyu/PhysPPI_jinyu/PhysPPI/experiments/_runtime/4gpu_model_v1/cache/precomputed_physppi_dataset_cache.json
+    alignments_directory: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/AFDB-10k-1
+    target_structures_directory: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/AFDB-10k-1
+    target_structure_file_format: npz
+    reference_molecule_directory: /101045/jinyu/PhysPPI_jinyu/PhysPPI/openfold3/core/data/resources/canonical_protein_data/reference_mols
+    ccd_file: /101045/jinyu/PhysPPI_jinyu/PhysPPI/experiments/_runtime/assets/ccd/components.cif

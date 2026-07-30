@@ -423,7 +423,7 @@ def validate_physppi_features(
     interaction_valid_shape = _shape(features.get("physppi_interaction_aux_valid"))
     if (
         contact_shape != (n_tokens, n_tokens)
-        or interaction_shape != (n_tokens, n_tokens, 7)
+        or interaction_shape != (n_tokens, n_tokens, 5)
         or interaction_distance_shape != (n_tokens, n_tokens)
         or interaction_valid_shape != (n_tokens, n_tokens)
     ):
@@ -629,7 +629,7 @@ def _validate_collated(batch: Mapping[str, object], n_tokens: int) -> list[Findi
         ]
     expected_pair_shapes = {
         "physppi_contact_pair_mask": (1, n_tokens, n_tokens),
-        "physppi_interaction_type_mask": (1, n_tokens, n_tokens, 7),
+        "physppi_interaction_type_mask": (1, n_tokens, n_tokens, 5),
         "physppi_interaction_distance": (1, n_tokens, n_tokens),
         "physppi_interaction_aux_valid": (1, n_tokens, n_tokens),
     }

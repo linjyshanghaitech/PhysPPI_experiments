@@ -345,6 +345,16 @@ def aggregate_atom_feat_to_tokens_nd(
                 atom_mask_i.to(torch.bool), bs, n_atom
             )
 
+        valid_idx = idx_map_bs_atom[atom_mask_bs_atom]
+        if valid_idx.numel() > 0:
+            min_idx = int(valid_idx.min().item())
+            max_idx = int(valid_idx.max().item())
+            if min_idx < 0 or max_idx >= n_token:
+                raise ValueError(
+                    f"atom_to_token_index_list[{idx}] contains indices outside "
+                    f"[0, {n_token}) for atom axis {d}: min={min_idx}, max={max_idx}"
+                )
+
         # Broadcast token mask to (*bs, n_token)
         if token_mask_i is None:
             token_mask_bs_token = torch.ones(
@@ -904,7 +914,9 @@ def get_token_frame_atoms(
                 safe_start_atom_index + batch["num_atoms_per_token"].long()
             )
             frame_index_is_valid &= (~is_standard_token) | within_token
-        frame_atoms[key]["token_atom_mask"] *= frame_index_is_valid
+        frame_atoms[key]["token_atom_mask"] = (
+            frame_atoms[key]["token_atom_mask"] * frame_index_is_valid
+        )
         frame_atoms[key]["index"] = torch.where(frame_index_is_valid, frame_index, 0)
 
     # Extract coordinates

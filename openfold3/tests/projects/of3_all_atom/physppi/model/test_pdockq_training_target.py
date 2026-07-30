@@ -74,6 +74,109 @@ def test_runner_populates_candidate_specific_pdockq_targets(monkeypatch):
     assert torch.equal(batch["physppi_pdockq_target"].sum(-1), torch.ones(1, 2))
 
 
+def test_runner_populates_eval_pdockq_targets_from_full_rollout_predictions(
+    monkeypatch,
+):
+    import openfold3.projects.of3_all_atom.runner as module
+
+    seen = {}
+
+    def fake_per_candidate_complex_dockq(*, prediction, gt, batch):
+        seen["prediction"] = prediction
+        return torch.tensor([[0.2, 0.8]]), torch.tensor([[True, True]])
+
+    monkeypatch.setattr(
+        module, "per_candidate_complex_dockq", fake_per_candidate_complex_dockq
+    )
+    batch = _minimal_target_batch()
+    outputs = {
+        "atom_positions_predicted": torch.randn(1, 2, 4, 3),
+        "pdockq_logits": torch.randn(1, 2, 50),
+    }
+
+    OpenFold3AllAtom._populate_physppi_pdockq_targets(
+        _runner(PHYSPPI_SCOPE), batch, outputs
+    )
+
+    assert seen["prediction"] is outputs["atom_positions_predicted"]
+    assert batch["physppi_pdockq_target"].shape == (1, 2, 50)
+    torch.testing.assert_close(
+        batch["physppi_pdockq_target_score"],
+        torch.tensor([[0.2, 0.8]]),
+    )
+    assert batch["physppi_pdockq_valid"].tolist() == [[True, True]]
+
+
+def test_runner_does_not_mask_pdockq_targets_for_negative_original_residue_ids(
+    monkeypatch,
+    caplog,
+):
+    import openfold3.projects.of3_all_atom.runner as module
+
+    def fake_per_candidate_complex_dockq(*, prediction, gt, batch):
+        assert batch["residue_index"].tolist() == [[[-4, -3, 1, 2]]]
+        return torch.tensor([[0.25, 0.75]]), torch.tensor([[True, True]])
+
+    monkeypatch.setattr(
+        module, "per_candidate_complex_dockq", fake_per_candidate_complex_dockq
+    )
+    batch = _minimal_target_batch()
+    batch.update(
+        {
+            "pdb_id": ["7k3h_1"],
+            "token_mask": torch.ones(1, 1, 4),
+            "num_atoms_per_token": torch.ones(1, 1, 4, dtype=torch.long),
+            "asym_id": torch.tensor([[[1, 1, 2, 2]]]),
+            "residue_index": torch.tensor([[[-4, -3, 1, 2]]]),
+            "is_protein": torch.ones(1, 1, 4, dtype=torch.bool),
+            "is_rna": torch.zeros(1, 1, 4, dtype=torch.bool),
+            "is_dna": torch.zeros(1, 1, 4, dtype=torch.bool),
+            "is_atomized": torch.zeros(1, 1, 4, dtype=torch.bool),
+        }
+    )
+    outputs = {
+        "atom_positions_diffusion": torch.randn(1, 2, 4, 3),
+        "pdockq_logits": torch.randn(1, 2, 50),
+    }
+
+    OpenFold3AllAtom._populate_physppi_pdockq_targets(
+        _runner(PHYSPPI_SCOPE), batch, outputs
+    )
+
+    assert batch["physppi_pdockq_valid"].tolist() == [[True, True]]
+    assert batch["physppi_pdockq_diag_valid_count"] == 2
+    assert batch["physppi_pdockq_target"].sum().item() > 0
+    assert "Skipping pDockQ target" not in caplog.text
+
+
+def test_runner_propagates_pdockq_mapping_errors(monkeypatch):
+    import openfold3.projects.of3_all_atom.runner as module
+
+    def fake_per_candidate_complex_dockq(*, prediction, gt, batch):
+        raise ValueError(
+            "atom_to_token_index_list[0] contains indices outside [0, 4)"
+        )
+
+    monkeypatch.setattr(
+        module, "per_candidate_complex_dockq", fake_per_candidate_complex_dockq
+    )
+    batch = _minimal_target_batch()
+    batch["pdb_id"] = ["7k3h_1"]
+    outputs = {
+        "atom_positions_diffusion": torch.randn(1, 2, 4, 3),
+        "pdockq_logits": torch.randn(1, 2, 50),
+    }
+
+    with pytest.raises(ValueError, match="atom_to_token_index_list"):
+        OpenFold3AllAtom._populate_physppi_pdockq_targets(
+            _runner(PHYSPPI_SCOPE), batch, outputs
+        )
+
+    assert "physppi_pdockq_target" not in batch
+    assert "physppi_pdockq_valid" not in batch
+    assert "physppi_pdockq_target_score" not in batch
+
+
 def test_baseline_scope_does_not_build_or_attach_pdockq_targets(monkeypatch):
     import openfold3.projects.of3_all_atom.runner as module
 
@@ -210,6 +313,14 @@ def test_both_training_paths_populate_targets_after_model_before_loss():
         target_at = source.index("self._populate_physppi_pdockq_targets")
         loss_at = source.index("self.loss(")
         assert model_at < target_at < loss_at
+
+
+def test_validation_path_populates_pdockq_targets_after_model_before_loss():
+    source = inspect.getsource(OpenFold3AllAtom.eval_step)
+    model_at = source.index("self(batch)")
+    target_at = source.index("self._populate_physppi_pdockq_targets")
+    loss_at = source.index("self.loss(")
+    assert model_at < target_at < loss_at
 
 
 def test_automatic_training_step_passes_runtime_targets_to_loss(monkeypatch):

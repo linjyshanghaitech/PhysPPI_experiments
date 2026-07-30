@@ -1,0 +1,37 @@
+{
+  "cluster_stats_30": {
+    "max_size": 1877,
+    "mean_size": 10.03445998018276,
+    "n_clusters": 9083
+  },
+  "cluster_stats_40": {
+    "max_size": 1868,
+    "mean_size": 8.867775831873905,
+    "n_clusters": 10278
+  },
+  "components_in_train": 5340,
+  "components_in_val": 18,
+  "connected_components": 5358,
+  "largest_component": 6265,
+  "per_dataset": {
+    "afdb": {
+      "train": 9314,
+      "val": 686
+    },
+    "qbiolip": {
+      "train": 8685,
+      "val": 1307
+    }
+  },
+  "singleton_components": 3852,
+  "total_cases": 19992,
+  "train_cases": 17999,
+  "train_ratio": 0.9003101240496199,
+  "val_cases": 1993,
+  "val_ratio": 0.09968987595038015,
+  "weight_stats": {
+    "max": 5.804818543356811,
+    "mean": 1.0000000000001368,
+    "min": 0.0031075045735314837
+  }
+}

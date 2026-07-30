@@ -63,6 +63,7 @@ VAL_LOSSES = [
     *CONFIDENCE_LOSSES,
     *DISTOGRAM_LOSSES,
     "membrane_plane_loss",
+    "interaction_auxiliary_loss",
     "loss",
 ]
 

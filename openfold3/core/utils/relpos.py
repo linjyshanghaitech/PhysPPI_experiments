@@ -38,6 +38,13 @@ def relpos_complex(
     same_chain = asym_id[..., None] == asym_id[..., None, :]
     same_res = res_idx[..., None] == res_idx[..., None, :]
     same_entity = entity_id[..., None] == entity_id[..., None, :]
+    crop_segment_id = batch.get("crop_segment_id")
+    if crop_segment_id is None:
+        same_crop_segment = torch.ones_like(same_chain, dtype=torch.bool)
+    else:
+        same_crop_segment = (
+            crop_segment_id[..., None] == crop_segment_id[..., None, :]
+        ) & (crop_segment_id[..., None] > 0)
 
     def relpos(
         pos: torch.Tensor, condition: torch.BoolTensor, rel_clip_idx: int
@@ -71,7 +78,11 @@ def relpos_complex(
 
         return rel_pos
 
-    rel_pos = relpos(pos=res_idx, condition=same_chain, rel_clip_idx=max_relative_idx)
+    rel_pos = relpos(
+        pos=res_idx,
+        condition=same_chain & same_crop_segment,
+        rel_clip_idx=max_relative_idx,
+    )
     rel_token = relpos(
         pos=batch["token_index"],
         condition=same_chain & same_res,

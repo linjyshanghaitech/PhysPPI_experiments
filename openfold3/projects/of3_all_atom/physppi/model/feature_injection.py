@@ -259,7 +259,7 @@ def validate_optional_prior_features(
                 _shape_check(
                     value,
                     "physppi_interaction_type_mask",
-                    (n_tokens, n_tokens, 7),
+                    (n_tokens, n_tokens, 5),
                     mode,
                 )
                 if not torch.equal(value, value.transpose(-3, -2)):
@@ -275,21 +275,21 @@ def validate_optional_prior_features(
                 _shape_check(
                     coords,
                     "physppi_surface_local_coords",
-                    (n_tokens, 128, 3),
+                    (n_tokens, 64, 3),
                     mode,
                 )
             if feats is not None:
                 _shape_check(
                     feats,
                     "physppi_surface_features",
-                    (n_tokens, 128, 6),
+                    (n_tokens, 64, 6),
                     mode,
                 )
             if mask is not None:
-                _shape_check(mask, "physppi_surface_mask", (n_tokens, 128), mode)
+                _shape_check(mask, "physppi_surface_mask", (n_tokens, 64), mode)
             if charge_mask is not None:
                 _shape_check(
-                    charge_mask, "physppi_surface_charge_mask", (n_tokens, 128), mode
+                    charge_mask, "physppi_surface_charge_mask", (n_tokens, 64), mode
                 )
         elif slot == "tm":
             value = _payload(batch, "physppi_tm_token_mask", batch_size, mode)

@@ -9,13 +9,13 @@ from torch import nn
 class InteractionPairEncoder(nn.Module):
     """Project seven symmetric interaction channels into pair state."""
 
-    def __init__(self, c_z: int = 128, num_interaction_types: int = 7) -> None:
+    def __init__(self, c_z: int = 128, num_interaction_types: int = 5) -> None:
         super().__init__()
-        if int(num_interaction_types) != 7:
-            raise ValueError("PhysPPI interaction payloads require exactly 7 channels")
+        if int(num_interaction_types) != 5:
+            raise ValueError("PhysPPI interaction payloads require exactly 5 channels")
         self.c_z = int(c_z)
         self.proj = nn.Sequential(
-            nn.Linear(7, self.c_z),
+            nn.Linear(5, self.c_z),
             nn.LayerNorm(self.c_z),
             nn.GELU(),
             nn.Linear(self.c_z, self.c_z),
@@ -74,9 +74,9 @@ class InteractionPairEncoder(nn.Module):
         values = torch.as_tensor(payload, device=valid_pairs.device).bool()
         if values.ndim == 3:
             values = values.unsqueeze(0)
-        expected_shape = (*valid_pairs.shape, 7)
+        expected_shape = (*valid_pairs.shape, 5)
         if values.shape != expected_shape:
-            raise ValueError("interaction payload must have shape [B, N, N, 7]")
+            raise ValueError("interaction payload must have shape [B, N, N, 5]")
         values = values | values.transpose(-3, -2)
         support = values.any(dim=-1) & valid_pairs & active_mask[:, None, None]
         if not bool(support.any()):

@@ -265,8 +265,10 @@ class PriorComplexSettings(BaseModel):
     root: DirectoryPath
     index_cache_file: Path | None = None
     manifest: FilePathOrNone = None
+    sampling_weights: FilePathOrNone = None
     manifest_dataset_key: str | None = None
-    manifest_partition: Literal["train_ids", "diagnostic_ids"] = "train_ids"
+    manifest_partition: Literal["train_ids", "val_ids", "diagnostic_ids"] = "train_ids"
+    loss_weight: float = Field(default=1.0, gt=0.0)
     augmentation_policy: Literal["resample_per_occurrence", "fixed"] = (
         "resample_per_occurrence"
     )
@@ -275,6 +277,10 @@ class PriorComplexSettings(BaseModel):
     resource_view_token_trigger: int = 768
     resource_view_compatibility_trigger: int = 20
     resource_view_dmap_cutoff: float = 18.0
+    interface_preserving_crop: bool = True
+    min_residues_per_retained_protein_chain: int = Field(default=15, ge=1)
+    geometry_crop_retry_attempts: int = Field(default=16, ge=1)
+    retained_view_candidate_cap: int = Field(default=1024, ge=1)
     max_samples: int | None = None
     sample_ids: list[str] = Field(default_factory=list)
 
@@ -289,16 +295,6 @@ class PriorComplexSettings(BaseModel):
         if self.sample_ids:
             raise ValueError("manifest and sample_ids are mutually exclusive")
         return self
-
-    @field_validator("num_surface_neighbors")
-    @classmethod
-    def _require_canonical_surface_neighbors(cls, value: int) -> int:
-        if value != PHYSPPI_SURFACE_NEIGHBORS:
-            raise ValueError(
-                "PhysPPI surface neighborhoods are canonical and must use "
-                f"{PHYSPPI_SURFACE_NEIGHBORS} points"
-            )
-        return value
 
     @field_validator("resource_view_max_chains")
     @classmethod

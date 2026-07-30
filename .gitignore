@@ -46,5 +46,16 @@ cutlass/
 *.pt
 *.pth
 *.log
+*.pid
+*.pdb
+*.cif
+*.bcif
+*.jsonl
+metrics/
+logs/
+checkpoint/
+checkpoints/
+validation_artifacts/
+*_artifacts/
 .env
 .env.*

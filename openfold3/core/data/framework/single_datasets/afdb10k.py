@@ -19,12 +19,12 @@ class AFDB10kDataset(PhysPPIPriorComplexDatasetAdapter):
 
     reader_name = "AFDB"
 
-    def __init__(self, dataset_config) -> None:
+    def __init__(self, dataset_config, world_size: int | None = None) -> None:
         root = Path(dataset_config.physppi.root)
         try:
             self.reader = AFDB10kReader(
                 root,
-                dataset_config.physppi.max_samples,
+                None,
                 index_cache_file=dataset_config.physppi.index_cache_file,
             )
         except FileNotFoundError as exc:

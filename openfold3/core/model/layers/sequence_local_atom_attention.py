@@ -37,6 +37,18 @@ from openfold3.core.utils.checkpointing import checkpoint_section
 TensorDict = dict[str, torch.Tensor]
 
 
+def _atom_crop_segment_id(batch: TensorDict) -> torch.Tensor | None:
+    crop_segment_id = batch.get("crop_segment_id")
+    if crop_segment_id is None:
+        return None
+    atom_to_token_index = batch["atom_to_token_index"].long()
+    return torch.gather(
+        crop_segment_id.long(),
+        -1,
+        atom_to_token_index.clamp(min=0),
+    )
+
+
 class RefAtomFeatureEmbedder(nn.Module):
     """
     Implements AF3 Algorithm 5 (line 1 - 6).
@@ -137,12 +149,14 @@ class RefAtomFeatureEmbedder(nn.Module):
             n_query=n_query,
             n_key=n_key,
             atom_mask=batch["atom_mask"],
+            atom_crop_segment_id=_atom_crop_segment_id(batch),
         )
         v_l, v_m, _ = convert_single_rep_to_blocks(
             ql=batch["ref_space_uid"].unsqueeze(-1),
             n_query=n_query,
             n_key=n_key,
             atom_mask=batch["atom_mask"],
+            atom_crop_segment_id=_atom_crop_segment_id(batch),
         )
 
         # dlm: [*, N_blocks, N_query, N_key, 3]
@@ -452,7 +466,11 @@ class AtomAttentionEncoder(nn.Module):
 
         # Add the combined single conditioning to the pair rep (line 13 - 14)
         cl_l, cl_m, atom_mask = convert_single_rep_to_blocks(
-            ql=cl, n_query=self.n_query, n_key=self.n_key, atom_mask=batch["atom_mask"]
+            ql=cl,
+            n_query=self.n_query,
+            n_key=self.n_key,
+            atom_mask=batch["atom_mask"],
+            atom_crop_segment_id=_atom_crop_segment_id(batch),
         )
 
         # Note to devs: in previous checkpoints before v13, linear_l and linear_m

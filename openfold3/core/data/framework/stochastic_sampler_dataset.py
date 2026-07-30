@@ -146,6 +146,7 @@ class OF3DistributedSampler(DistributedSampler):
         seed: int = 0,
         drop_last: bool = False,
         distinct_samples_per_rank_group: bool = False,
+        global_datapoint_sampling: bool = False,
     ) -> None:
         """Initializes the SamplerDataset class.
 
@@ -187,6 +188,14 @@ class OF3DistributedSampler(DistributedSampler):
         self.epoch_len = epoch_len
         self.next_dataset_indices = next_dataset_indices
         self.distinct_samples_per_rank_group = distinct_samples_per_rank_group
+        self.global_datapoint_sampling = global_datapoint_sampling
+
+        if self.global_datapoint_sampling and self.distinct_samples_per_rank_group:
+            raise ValueError(
+                "global_datapoint_sampling cannot be combined with "
+                "distinct_samples_per_rank_group because deduplication may "
+                "perform additional multinomial draws"
+            )
 
         if (
             self.distinct_samples_per_rank_group
@@ -306,6 +315,46 @@ class OF3DistributedSampler(DistributedSampler):
             generator=generator,
         )
 
+    def get_global_datapoint_indices(
+        self,
+        generator: torch.Generator,
+        *,
+        num_samples: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Sample once from the concatenated datapoint-weight vector."""
+        probabilities = torch.cat(
+            [
+                torch.as_tensor(
+                    dataset.datapoint_cache[
+                        "datapoint_probabilities"
+                    ].to_numpy(),
+                    dtype=torch.float64,
+                )
+                for dataset in self.datasets
+            ]
+        )
+        flat_indices = torch.multinomial(
+            input=probabilities,
+            num_samples=num_samples,
+            replacement=True,
+            generator=generator,
+        )
+        lengths = torch.tensor(
+            [len(dataset.datapoint_cache) for dataset in self.datasets],
+            dtype=torch.long,
+        )
+        boundaries = torch.cumsum(lengths, dim=0)[:-1]
+        dataset_indices = torch.bucketize(
+            flat_indices,
+            boundaries,
+            right=True,
+        )
+        offsets = torch.cat(
+            [torch.zeros(1, dtype=torch.long), torch.cumsum(lengths, dim=0)[:-1]]
+        )
+        datapoint_indices = flat_indices - offsets[dataset_indices]
+        return dataset_indices, datapoint_indices
+
     def _deduplicate_rank_groups(
         self,
         dataset_indices: torch.Tensor,
@@ -372,14 +421,22 @@ class OF3DistributedSampler(DistributedSampler):
             generator = torch.Generator().manual_seed(
                 self.seed + self.epoch + chunk_idx * self._DISTINCT_CHUNK_SEED_STRIDE
             )
-            dataset_indices_i = self.get_dataset_indices(
-                generator=generator,
-                num_samples=num_samples,
-            )
-            datapoint_indices_i = self.get_datapoint_indices(
-                dataset_indices=dataset_indices_i,
-                generator=generator,
-            )
+            if self.global_datapoint_sampling:
+                dataset_indices_i, datapoint_indices_i = (
+                    self.get_global_datapoint_indices(
+                        generator=generator,
+                        num_samples=num_samples,
+                    )
+                )
+            else:
+                dataset_indices_i = self.get_dataset_indices(
+                    generator=generator,
+                    num_samples=num_samples,
+                )
+                datapoint_indices_i = self.get_datapoint_indices(
+                    dataset_indices=dataset_indices_i,
+                    generator=generator,
+                )
             datapoint_indices_i = self._deduplicate_rank_groups(
                 dataset_indices=dataset_indices_i,
                 datapoint_indices=datapoint_indices_i,

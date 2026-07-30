@@ -19,6 +19,7 @@ import numpy as np
 import torch
 
 from openfold3.core.data.resources.lists import AB_AG_CHAIN_TYPES
+from openfold3.core.metrics import quality as quality_module
 from openfold3.core.metrics.quality import (
     _spread_contacts,
     dockq,
@@ -411,6 +412,62 @@ class TestAllMetrics(unittest.TestCase):
             assert value.shape == (consts.batch_size, no_samples)
             assert chunked_value.shape == (consts.batch_size, no_samples)
             assert torch.allclose(value, chunked_value)
+
+
+def test_missing_validation_filters_use_boolean_dockq_fallback(monkeypatch):
+    batch = random_of3_features(
+        batch_size=1,
+        n_token=4,
+        n_msa=2,
+        n_templ=1,
+        is_eval=False,
+    )
+    batch["is_protein"].fill_(1)
+    batch["is_rna"].zero_()
+    batch["is_dna"].zero_()
+    batch["asym_id"][:, :2] = 1
+    batch["asym_id"][:, 2:] = 2
+    batch["ground_truth"]["atom_resolved_mask"].fill_(1)
+    batch = tensor_tree_map(lambda tensor: tensor.unsqueeze(1), batch)
+    n_atom = batch["atom_mask"].shape[-1]
+    outputs = {
+        "atom_positions_predicted": torch.randn(1, 1, n_atom, 3),
+        "plddt_logits": torch.randn(1, 1, n_atom, 50),
+    }
+    captured = {}
+
+    monkeypatch.setattr(quality_module, "get_full_complex_lddt", lambda **kwargs: {})
+    monkeypatch.setattr(quality_module, "get_plddt_metrics", lambda **kwargs: {})
+    monkeypatch.setattr(
+        quality_module,
+        "get_validation_lddt_metrics",
+        lambda **kwargs: {},
+    )
+    monkeypatch.setattr(
+        quality_module,
+        "get_superimpose_metrics",
+        lambda **kwargs: {},
+    )
+    monkeypatch.setattr(
+        quality_module,
+        "compute_rasa_batch",
+        lambda *args: torch.tensor(float("nan")),
+    )
+    monkeypatch.setattr(quality_module, "get_ab_ag_metrics", lambda **kwargs: {})
+
+    def capture_dockq_filter(**kwargs):
+        captured["dtype"] = kwargs["inter_filter_atomized"].dtype
+        return {}
+
+    monkeypatch.setattr(
+        quality_module,
+        "dockq_full_complex",
+        capture_dockq_filter,
+    )
+
+    get_metrics(batch, outputs, compute_extra_val_metrics=True)
+
+    assert captured["dtype"] == torch.bool
 
 
 # =============================================================================

@@ -71,7 +71,7 @@ dataset_configs:
           chain_crop:
             enabled: true
         physppi:
-          root: /101045/jinyu/PPI/Prior_out/training/Q-BioLiP-10k-new
+          root: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/Q-BioLiP-10k-new
           num_surface_neighbors: 128
         loss:
           confidence_loss_names: [plddt, pde, pae]
@@ -98,7 +98,7 @@ dataset_configs:
           chain_crop:
             enabled: true
         physppi:
-          root: /101045/jinyu/PPI/Prior_out/training/AFDB-10k-1
+          root: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/AFDB-10k-1
           num_surface_neighbors: 128
         loss:
           confidence_loss_names: [plddt, pde, pae]

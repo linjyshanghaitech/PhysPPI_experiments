@@ -20,6 +20,13 @@ from openfold3.projects.of3_all_atom.physppi.data.readers.index_cache import (
 )
 from openfold3.projects.of3_all_atom.physppi.data.readers.qbiolip10k import (
     _canonical_msa_chain,
+    _load_precomputed_dmap,
+    _load_precomputed_interactions,
+    _load_precomputed_mesh_presence,
+    _load_precomputed_opm,
+    _load_precomputed_seq,
+    _precomputed_chain_id,
+    _precomputed_sample_id,
 )
 
 AFDBSamplePaths = PriorSamplePaths
@@ -175,7 +182,8 @@ class AFDB10kReader:
     ):
         self.root = Path(root)
         self.max_samples = _validate_max_samples(max_samples)
-        self.final_root = self.root / "chunk"
+        self.precomputed_only = next(self.root.glob("chunk*/*_gt.pt"), None) is not None
+        self.final_root = self.root if self.precomputed_only else self.root / "chunk"
         if not self.final_root.is_dir():
             raise FileNotFoundError(f"missing final AFDB root: {self.final_root}")
         self._paths: dict[str, AFDBSamplePaths] = {}
@@ -189,6 +197,7 @@ class AFDB10kReader:
                     "reader": "afdb10k",
                     "root": str(self.root.resolve()),
                     "max_samples": self.max_samples,
+                    "precomputed_only": self.precomputed_only,
                 },
                 self._build_index_payload,
             )
@@ -201,6 +210,47 @@ class AFDB10kReader:
 
     def _index(self) -> None:
         if self.max_samples == 0:
+            return
+        if self.precomputed_only:
+            for gt_pt in sorted(self.final_root.glob("chunk*/*_gt.pt")):
+                if not gt_pt.is_file():
+                    raise ValueError(f"AFDB precomputed GT path is not a file: {gt_pt}")
+                chunk = gt_pt.parent
+                sample_id = _precomputed_sample_id(gt_pt)
+                monomer_pdbs = {
+                    _precomputed_chain_id(path, sample_id): path
+                    for path in sorted(chunk.glob(f"{sample_id}_*_monomer.pt"))
+                }
+                if not monomer_pdbs:
+                    raise ValueError(f"mandatory AFDB monomer pt missing for {sample_id}")
+                chain_sequences = _load_precomputed_seq(
+                    chunk / f"{sample_id}_seq.pt",
+                    "AFDB",
+                )
+                if len(chain_sequences) != 2:
+                    raise ValueError(
+                        f"AFDB sample must have exactly two protein chains: {sample_id}"
+                    )
+                seq_values = tuple(chain_sequences.values())
+                if seq_values[0] != seq_values[1]:
+                    raise ValueError(
+                        f"AFDB homodimer chains must have identical sequences: {sample_id}"
+                    )
+                if set(monomer_pdbs) != set(chain_sequences):
+                    raise ValueError(
+                        f"AFDB monomer chains must match seq.pt chains for {sample_id}"
+                    )
+                self._paths[sample_id] = AFDBSamplePaths(
+                    sample_id=sample_id,
+                    gt_pdb=gt_pt,
+                    monomer_pdbs=monomer_pdbs,
+                    main_msa_npzs={},
+                    paired_msa_npzs={},
+                    prior_pkl=chunk / f"{sample_id}.pkl",
+                )
+                self._chain_sequences[sample_id] = chain_sequences
+                if self.max_samples is not None and len(self._paths) >= self.max_samples:
+                    break
             return
         for pkl_path in sorted(self.final_root.glob("chunk*/prior_pkl/*.pkl")):
             if not pkl_path.is_file():
@@ -296,6 +346,18 @@ class AFDB10kReader:
 
     def read(self, sample_id: str) -> AFDBSample:
         paths = self.locate(sample_id)
+        if self.precomputed_only:
+            chunk = paths.gt_pdb.parent
+            return AFDBSample(
+                sample_id=sample_id,
+                dmap=_load_precomputed_dmap(chunk, sample_id, "AFDB"),
+                interactions=_load_precomputed_interactions(chunk, sample_id, "AFDB"),
+                mesh=_load_precomputed_mesh_presence(chunk, sample_id),
+                opm=_load_precomputed_opm(chunk, sample_id),
+                paths=paths,
+                chain_sequences=self._chain_sequences[sample_id],
+                dataset_name="AFDB",
+            )
         return read_prior_pkl(
             paths.prior_pkl,
             sample_id,

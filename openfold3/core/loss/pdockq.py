@@ -26,6 +26,65 @@ def dockq_to_soft_bins(scores: torch.Tensor, no_bins: int = 50) -> torch.Tensor:
     return target.scatter_(-1, index.unsqueeze(-1), 1.0)
 
 
+def _dockq_residue_slots_from_batch(batch: dict) -> torch.Tensor:
+    """Build DockQ-private compact residue slots from token order.
+
+    Raw PDB residue IDs can be negative or sparse and are not safe scatter/gather
+    slots. DockQ only needs residue grouping, so this allocates per-chain
+    0-based slots while preserving adjacent same-residue grouping within each
+    chain.
+    """
+
+    token_mask = batch["token_mask"].bool()
+    num_atoms_per_token = batch["num_atoms_per_token"].to(device=token_mask.device)
+    asym_id = batch["asym_id"].to(device=token_mask.device)
+    residue_index = batch["residue_index"].to(device=token_mask.device)
+
+    expected_shape = token_mask.shape
+    for name, value in (
+        ("num_atoms_per_token", num_atoms_per_token),
+        ("asym_id", asym_id),
+        ("residue_index", residue_index),
+    ):
+        if value.shape != expected_shape:
+            raise ValueError(
+                f"{name} must match token_mask shape, got "
+                f"{tuple(value.shape)} and {tuple(expected_shape)}"
+            )
+
+    effective_token = (
+        token_mask & (num_atoms_per_token.long() > 0) & (asym_id.long() > 0)
+    )
+    slots = torch.zeros_like(residue_index, dtype=torch.long, device=token_mask.device)
+    if slots.numel() == 0:
+        return slots
+
+    n_token = int(token_mask.shape[-1])
+    flat_effective = effective_token.reshape(-1, n_token)
+    flat_asym_id = asym_id.long().reshape(-1, n_token)
+    flat_residue_index = residue_index.long().reshape(-1, n_token)
+    flat_slots = slots.reshape(-1, n_token)
+
+    for row in range(flat_slots.shape[0]):
+        chain_state: dict[int, tuple[int, int, int]] = {}
+        for token_pos in range(n_token):
+            if not bool(flat_effective[row, token_pos].item()):
+                continue
+            chain_id = int(flat_asym_id[row, token_pos].item())
+            residue_id = int(flat_residue_index[row, token_pos].item())
+            state = chain_state.get(chain_id)
+            if state is not None and state[0] == residue_id:
+                slot = state[1]
+                next_slot = state[2]
+            else:
+                slot = state[2] if state is not None else 0
+                next_slot = slot + 1
+            chain_state[chain_id] = (residue_id, slot, next_slot)
+            flat_slots[row, token_pos] = slot
+
+    return slots
+
+
 def per_candidate_complex_dockq(
     *, prediction: torch.Tensor, gt: torch.Tensor, batch: dict
 ):
@@ -79,6 +138,7 @@ def per_candidate_complex_dockq(
             token_feat=token_feature,
         )
 
+    dockq_residue_slots = _dockq_residue_slots_from_batch(batch)
     dockq_kwargs = {
         "pred_coords": prediction.detach().float(),
         "gt_coords": expanded_gt,
@@ -87,7 +147,7 @@ def per_candidate_complex_dockq(
             atomize(batch["asym_id"]), "asym_id_atomized"
         ),
         "res_id_atomized": expand_candidates(
-            atomize(batch["residue_index"]), "res_id_atomized"
+            atomize(dockq_residue_slots), "res_id_atomized"
         ),
         "ref_atom_name_chars_atomized": expand_candidates(
             batch["ref_atom_name_chars"],

@@ -54,6 +54,7 @@ class CheckpointConfig(BaseModel):
 
     monitor: str | None = None
     mode: str | None = "min"
+    dirpath: str | None = None
     every_n_epochs: int = 1
     auto_insert_metric_name: bool = False
     filename: str | None = None
@@ -64,21 +65,30 @@ class CheckpointConfig(BaseModel):
     save_on_train_epoch_end: bool | None = None
     train_time_interval: Any | None = None
 
+    @field_validator("every_n_epochs")
+    @classmethod
+    def validate_every_n_epochs(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("checkpoint_config.every_n_epochs must be non-negative.")
+        return value
+
+    @field_validator("every_n_train_steps")
+    @classmethod
+    def validate_every_n_train_steps(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError(
+                "checkpoint_config.every_n_train_steps must be non-negative."
+            )
+        return value
+
     @model_validator(mode="after")
     def validate_checkpoint_settings(self):
-        if self.every_n_train_steps not in (None, 0):
-            raise ValueError(
-                "Mid-epoch checkpointing is not allowed: set "
-                "checkpoint_config.every_n_train_steps to null. "
-                "Use every_n_epochs in the checkpoint callback "
-                "config for epoch-boundary checkpointing."
-            )
         if self.train_time_interval not in (None, 0, "", False):
             raise ValueError(
-                "Mid-epoch checkpointing is not allowed: set "
+                "Time-based checkpointing is not allowed: set "
                 "checkpoint_config.train_time_interval to null. "
-                "Use every_n_epochs in the checkpoint callback "
-                "config for epoch-boundary checkpointing."
+                "Use every_n_epochs or every_n_train_steps in the "
+                "checkpoint callback config."
             )
         return self
 
@@ -118,6 +128,7 @@ class DataModuleArgs(BaseModel):
     pin_memory: StrictBool = False
     epoch_len: int = 4
     distinct_samples_per_rank_group: bool = False
+    global_datapoint_sampling: bool = False
 
 
 class PlTrainerArgs(BaseModel):

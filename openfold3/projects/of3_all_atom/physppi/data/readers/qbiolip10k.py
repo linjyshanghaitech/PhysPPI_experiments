@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+
+import torch
 
 from openfold3.projects.of3_all_atom.physppi.data.priors.schema import (
     INTERACTION_TYPES,
@@ -80,6 +83,130 @@ def _validate_max_samples(max_samples: int | None) -> int | None:
     return max_samples
 
 
+def _precomputed_sample_id(gt_path: Path) -> str:
+    suffix = "_gt.pt"
+    if not gt_path.name.endswith(suffix):
+        raise ValueError(f"precomputed GT path must end with {suffix}: {gt_path}")
+    return gt_path.name[: -len(suffix)]
+
+
+def _precomputed_chain_id(path: Path, sample_id: str) -> str:
+    prefix = f"{sample_id}_"
+    suffix = "_monomer.pt"
+    if not path.name.startswith(prefix) or not path.name.endswith(suffix):
+        raise ValueError(f"malformed precomputed monomer path: {path}")
+    chain_id = path.name[len(prefix) : -len(suffix)]
+    if not chain_id or "_" in chain_id or "=" in chain_id or "|" in chain_id:
+        raise ValueError(f"invalid precomputed monomer chain id: {path}")
+    return chain_id
+
+
+def _load_precomputed_seq(path: Path, dataset_name: str) -> dict[str, str]:
+    if not path.is_file():
+        raise ValueError(f"mandatory {dataset_name} seq.pt missing: {path}")
+    raw = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{dataset_name} seq.pt must contain a chain mapping")
+    sequences: dict[str, str] = {}
+    for chain_id, payload in raw.items():
+        if not isinstance(chain_id, str) or not isinstance(payload, Mapping):
+            raise ValueError(f"{dataset_name} seq.pt has malformed chain data")
+        sequence = payload.get("full_seq_1aa")
+        if not isinstance(sequence, str) or not sequence:
+            raise ValueError(f"{dataset_name} seq.pt missing full_seq_1aa for {chain_id}")
+        sequences[chain_id] = sequence
+    return sequences
+
+
+def _rows_to_dmap(raw: object, dataset_name: str) -> dict[str, tuple[tuple[int, int, float], ...]]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{dataset_name} interface_residues.pt dmap must be a mapping")
+    parsed: dict[str, tuple[tuple[int, int, float], ...]] = {}
+    for chain_pair, rows in raw.items():
+        if not isinstance(chain_pair, str) or "|" not in chain_pair:
+            raise ValueError(f"{dataset_name} dmap key must use chain-pair syntax A|B")
+        row_array = rows.detach().cpu().numpy() if torch.is_tensor(rows) else rows
+        parsed_rows = []
+        for row in row_array:
+            if len(row) != 3:
+                raise ValueError(f"{dataset_name} dmap row must have 3 columns")
+            parsed_rows.append((int(row[0]), int(row[1]), float(row[2])))
+        parsed[chain_pair] = tuple(parsed_rows)
+    return parsed
+
+
+def _load_precomputed_dmap(chunk: Path, sample_id: str, dataset_name: str):
+    path = chunk / f"{sample_id}_interface_residues.pt"
+    if not path.is_file():
+        return {}
+    raw = torch.load(path, map_location="cpu", weights_only=False)
+    dmap = raw.get("dmap", {}) if isinstance(raw, Mapping) else {}
+    return _rows_to_dmap(dmap, dataset_name)
+
+
+def _load_precomputed_interactions(
+    chunk: Path,
+    sample_id: str,
+    dataset_name: str,
+) -> tuple[InteractionRecord, ...]:
+    path = chunk / f"{sample_id}_interaction_pairs.pt"
+    if not path.is_file():
+        return ()
+    raw = torch.load(path, map_location="cpu", weights_only=False)
+    interactions = raw.get("interactions", {}) if isinstance(raw, Mapping) else {}
+    if not isinstance(interactions, Mapping):
+        raise ValueError(f"{dataset_name} interaction_pairs.pt must be a mapping")
+    records: list[InteractionRecord] = []
+    for chain_pair, payload in interactions.items():
+        if not isinstance(chain_pair, str) or "|" not in chain_pair:
+            raise ValueError(f"{dataset_name} interaction key must use A|B")
+        if not isinstance(payload, Mapping):
+            raise ValueError(f"{dataset_name} interaction payload must be a mapping")
+        pairs = payload.get("pairs")
+        if pairs is None:
+            continue
+        pair_array = pairs.detach().cpu().numpy() if torch.is_tensor(pairs) else pairs
+        atom_1 = payload.get("atom_1", ())
+        atom_2 = payload.get("atom_2", ())
+        for index, row in enumerate(pair_array):
+            type_id = int(row[2])
+            if type_id < 0 or type_id >= len(INTERACTION_TYPES):
+                raise ValueError(f"{dataset_name} interaction type id out of range")
+            records.append(
+                InteractionRecord(
+                    chain_pair=chain_pair,
+                    r1=int(row[0]),
+                    r2=int(row[1]),
+                    interaction_type=INTERACTION_TYPES[type_id],
+                    distance=None,
+                    atom_1=tuple(atom_1[index]) if index < len(atom_1) else None,
+                    atom_2=tuple(atom_2[index]) if index < len(atom_2) else None,
+                )
+            )
+    return tuple(records)
+
+
+def _load_precomputed_opm(chunk: Path, sample_id: str) -> dict[str, object]:
+    path = chunk / f"{sample_id}_membrane_relative_location.pt"
+    if not path.is_file():
+        return {}
+    raw = torch.load(path, map_location="cpu", weights_only=False)
+    return dict(raw) if isinstance(raw, Mapping) else {}
+
+
+def _load_precomputed_mesh_presence(chunk: Path, sample_id: str) -> dict[str, tuple[()]]:
+    path = chunk / f"{sample_id}_mesh.pt"
+    if not path.is_file():
+        return {}
+    raw = torch.load(path, map_location="cpu", weights_only=False)
+    data = raw.get("data", {}) if isinstance(raw, Mapping) else {}
+    if not isinstance(data, Mapping):
+        return {}
+    return {str(chain_id): () for chain_id in data}
+
+
 class QBioLiP10kReader:
     """Index and parse only the canonical visible Q-BioLiP-10k-new tree.
 
@@ -96,7 +223,8 @@ class QBioLiP10kReader:
     ):
         self.root = Path(root)
         self.max_samples = _validate_max_samples(max_samples)
-        self.final_root = self.root / "chunk"
+        self.precomputed_only = next(self.root.glob("chunk*/*_gt.pt"), None) is not None
+        self.final_root = self.root if self.precomputed_only else self.root / "chunk"
         if not self.final_root.is_dir():
             raise FileNotFoundError(f"missing final Q-BioLiP root: {self.final_root}")
         if index_cache_file is None:
@@ -108,6 +236,7 @@ class QBioLiP10kReader:
                     "reader": "qbiolip10k",
                     "root": str(self.root.resolve()),
                     "max_samples": self.max_samples,
+                    "precomputed_only": self.precomputed_only,
                 },
                 self._index,
             )
@@ -115,6 +244,31 @@ class QBioLiP10kReader:
     def _index(self) -> dict[str, QBioLiPSamplePaths]:
         indexed: dict[str, QBioLiPSamplePaths] = {}
         if self.max_samples == 0:
+            return indexed
+        if self.precomputed_only:
+            for gt_pt in sorted(self.final_root.glob("chunk*/*_gt.pt")):
+                if not gt_pt.is_file():
+                    raise ValueError(f"Q-BioLiP precomputed GT path is not a file: {gt_pt}")
+                chunk = gt_pt.parent
+                sample_id = _precomputed_sample_id(gt_pt)
+                monomer_pdbs = {
+                    _precomputed_chain_id(path, sample_id): path
+                    for path in sorted(chunk.glob(f"{sample_id}_*_monomer.pt"))
+                }
+                if not monomer_pdbs:
+                    raise ValueError(
+                        f"mandatory Q-BioLiP monomer pt missing for {sample_id}"
+                    )
+                indexed[sample_id] = QBioLiPSamplePaths(
+                    sample_id=sample_id,
+                    gt_pdb=gt_pt,
+                    monomer_pdbs=monomer_pdbs,
+                    main_msa_npzs={},
+                    paired_msa_npzs={},
+                    prior_pkl=chunk / f"{sample_id}.pkl",
+                )
+                if self.max_samples is not None and len(indexed) >= self.max_samples:
+                    break
             return indexed
         for pkl_path in sorted(self.final_root.glob("chunk*/prior_pkl/*.pkl")):
             if not pkl_path.is_file():
@@ -302,6 +456,26 @@ class QBioLiP10kReader:
 
     def read(self, sample_id: str) -> QBioLiPSample:
         paths = self.locate(sample_id)
+        if self.precomputed_only:
+            chunk = paths.gt_pdb.parent
+            chain_sequences = _load_precomputed_seq(
+                chunk / f"{sample_id}_seq.pt",
+                "Q-BioLiP",
+            )
+            return QBioLiPSample(
+                sample_id=sample_id,
+                dmap=_load_precomputed_dmap(chunk, sample_id, "Q-BioLiP"),
+                interactions=_load_precomputed_interactions(
+                    chunk,
+                    sample_id,
+                    "Q-BioLiP",
+                ),
+                mesh=_load_precomputed_mesh_presence(chunk, sample_id),
+                opm=_load_precomputed_opm(chunk, sample_id),
+                paths=paths,
+                chain_sequences=chain_sequences,
+                dataset_name="Q-BioLiP",
+            )
         return read_prior_pkl(paths.prior_pkl, sample_id, paths, "Q-BioLiP")
 
 

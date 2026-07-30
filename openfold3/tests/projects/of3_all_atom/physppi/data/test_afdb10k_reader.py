@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 
 from openfold3.projects.of3_all_atom.physppi.data.readers.afdb10k import AFDB10kReader
 
@@ -91,6 +92,57 @@ def _write_afdb_case(
             handle,
         )
     return root
+
+
+def _write_afdb_precomputed_case(
+    root: Path,
+    sample_id: str = "AF-0000000000000001-model_v1",
+) -> Path:
+    chunk = root / "chunk0001"
+    chunk.mkdir(parents=True)
+    torch.save({"coord": torch.zeros((1, 3))}, chunk / f"{sample_id}_gt.pt")
+    torch.save(
+        {
+            chain_id: {
+                "full_seq_1aa": "AC",
+                "full_seq_3aa": ["ALA", "CYS"],
+                "resseq_to_sequence_index": {1: 0, 2: 1},
+                "mask": [True, True],
+                "msa_eligible": True,
+            }
+            for chain_id in ("A", "B")
+        },
+        chunk / f"{sample_id}_seq.pt",
+    )
+    torch.save(
+        {"dmap": {"A|B": torch.tensor([[1, 1, 7.5]], dtype=torch.float32)}},
+        chunk / f"{sample_id}_interface_residues.pt",
+    )
+    for chain_id in ("A", "B"):
+        torch.save({"coord": torch.zeros((1, 3))}, chunk / f"{sample_id}_{chain_id}_monomer.pt")
+    return root
+
+
+def test_reads_afdb_precomputed_root_without_prior_pkl(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openfold3.projects.of3_all_atom.physppi.data.readers import afdb10k
+
+    sample_id = "AF-0000000000000001-model_v1"
+    _write_afdb_precomputed_case(tmp_path, sample_id)
+    monkeypatch.setattr(
+        afdb10k,
+        "read_prior_pkl",
+        lambda *args, **kwargs: pytest.fail("precomputed reader must not read prior pkl"),
+    )
+
+    sample = AFDB10kReader(tmp_path).read(sample_id)
+
+    assert sample.sample_id == sample_id
+    assert sample.dmap == {"A|B": ((1, 1, 7.5),)}
+    assert sample.chain_sequences == {"A": "AC", "B": "AC"}
+    assert sample.paths.gt_pdb == tmp_path / "chunk0001" / f"{sample_id}_gt.pt"
 
 
 def test_afdb_homodimer_shares_main_msa_without_fabricating_paired(

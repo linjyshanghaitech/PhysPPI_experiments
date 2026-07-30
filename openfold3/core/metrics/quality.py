@@ -2041,6 +2041,7 @@ def get_metrics(
 
     token_mask = batch["token_mask"]
     atom_padding_mask = batch["atom_mask"]
+    atom_padding_bool = atom_padding_mask.bool()
     num_atoms_per_token = batch["num_atoms_per_token"]
     no_samples = pred_coords.shape[1]
     # getting rid of modified residues
@@ -2116,9 +2117,9 @@ def get_metrics(
     )
 
     # set up filters for validation metrics if present, otherwise pass ones
-    intra_mask_base = expand_sample_dim(atom_padding_mask)
+    intra_mask_base = expand_sample_dim(atom_padding_bool)
     inter_mask_base = expand_sample_dim(
-        atom_padding_mask[..., None] * atom_padding_mask[..., None, :]
+        atom_padding_bool[..., None] & atom_padding_bool[..., None, :]
     )
     intra_filter_atomized = batch["ground_truth"].get(
         "intra_filter_atomized", intra_mask_base

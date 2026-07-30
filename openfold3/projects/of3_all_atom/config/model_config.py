@@ -294,6 +294,7 @@ model_config = mlc.ConfigDict(
                 "decay_factor": 0.95,
             },
             "ema": {"decay": 0.999, "submodules_to_update": None},
+            "validation_use_ema_weights": True,
             "gradient_clipping": {
                 "per_sample_clipping": True,
                 "clip_val": 10.0,
@@ -307,6 +308,15 @@ model_config = mlc.ConfigDict(
                 "log_grad_norm": False,
                 "log_extra_grad_metrics": False,
                 "profile_grad_logging": False,
+            },
+            "validation_artifacts": {
+                "enabled": False,
+                "output_dir": None,
+                "structure_format": "pdb",
+                "expected_samples": None,
+                "fail_on_sample_count_mismatch": True,
+                "profile_timing": False,
+                "synchronize_cuda_timing": False,
             },
         },
         "architecture": {
@@ -642,6 +652,7 @@ model_config = mlc.ConfigDict(
                     "c_z": c_z,
                     "no_bins": 50,
                     "candidate_chunk_size": 1,
+                    "head_module": None,
                 },
             },
             "loss_module": {
@@ -680,9 +691,11 @@ model_config = mlc.ConfigDict(
                 "membrane": {
                     "normal_weight": 1.0,
                     "offset_weight": 1.0,
+                    "include_in_total_loss": True,
                 },
                 "interaction_auxiliary": {
                     "distance_weight": 1.0,
+                    "include_in_total_loss": True,
                 },
                 "diffusion": {
                     "sigma_data": sigma_data,

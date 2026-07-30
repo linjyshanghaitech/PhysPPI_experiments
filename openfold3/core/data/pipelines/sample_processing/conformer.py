@@ -282,7 +282,7 @@ def get_reference_conformer_data_of3(
         # match the behaviour used for all other residue/ligand SDF entries.
         ref_mol_entry = reference_mol_metadata.get(ref_mol_id)
         if ref_mol_entry is None:
-            logger.warning(
+            logger.debug(
                 "reference_mol_metadata has no entry for %s — using default "
                 "conformer_gen_strategy",
                 ref_mol_id,
