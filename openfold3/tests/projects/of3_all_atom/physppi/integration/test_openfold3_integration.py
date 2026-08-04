@@ -47,11 +47,15 @@ def test_physppi_model_validation_rejects_active_optional_slot_without_payload()
     model = OpenFold3(cfg)
     model.train()
 
-    with pytest.raises(ValueError, match="active optional contact slot is missing"):
+    with pytest.raises(
+        ValueError, match="active optional interface_residue slot is missing"
+    ):
         model._validate_physppi_features_for_batch(
             {
                 "token_mask": torch.ones(1, 3),
-                "physppi_contact_active": torch.ones(1, dtype=torch.bool),
+                "physppi_interface_residue_active": torch.ones(
+                    1, dtype=torch.bool
+                ),
             }
         )
 

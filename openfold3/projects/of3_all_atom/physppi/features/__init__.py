@@ -2,8 +2,8 @@
 
 from openfold3.projects.of3_all_atom.physppi.features._builders import (
     PhysPPIDataError,
-    build_contact_features,
     build_interaction_features,
+    build_interface_residue_features,
     build_membrane_target,
     build_surface_features,
     build_tm_features,
@@ -16,8 +16,8 @@ from openfold3.projects.of3_all_atom.physppi.features.surface_position import (
 
 __all__ = [
     "PhysPPIDataError",
-    "build_contact_features",
     "build_interaction_features",
+    "build_interface_residue_features",
     "build_membrane_target",
     "build_surface_features",
     "build_tm_features",

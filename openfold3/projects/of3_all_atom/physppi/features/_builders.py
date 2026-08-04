@@ -16,11 +16,16 @@ from typing import Any
 import numpy as np
 
 from openfold3.projects.of3_all_atom.physppi.data.readers.qbiolip10k import (
-    INTERACTION_TYPES,
     InteractionRecord,
 )
 
-_INTERACTION_CHANNELS = {name: index for index, name in enumerate(INTERACTION_TYPES)}
+_INTERACTION_CHANNELS = {
+    "hbond": 0,
+    "saltbridge": 1,
+    "hydrophobic": 2,
+    "pistacking": 3,
+    "pication": 4,
+}
 
 
 class PhysPPIDataError(ValueError):
@@ -154,32 +159,42 @@ def iter_mappable_dmap_edges(
 
     n_tokens = _num_tokens(token_index)
     if dmap and not isinstance(dmap, Mapping):
-        raise PhysPPIDataError("contact payload must be a mapping")
+        raise PhysPPIDataError("interface residue payload must be a mapping")
     if isinstance(dmap, Mapping):
         for chain_pair, edges in dmap.items():
             pair = _chain_pair(chain_pair)
             if pair is None:
-                raise PhysPPIDataError("contact payload has an invalid chain pair")
+                raise PhysPPIDataError(
+                    "interface residue payload has an invalid chain pair"
+                )
             if isinstance(edges, (str, bytes)) or not isinstance(edges, Sequence):
-                raise PhysPPIDataError("contact payload has invalid edge records")
+                raise PhysPPIDataError(
+                    "interface residue payload has invalid edge records"
+                )
             left_chain, right_chain = pair
             for edge in edges:
                 values = _edge_values(edge)
                 if values is None:
-                    raise PhysPPIDataError("contact payload has an invalid edge")
+                    raise PhysPPIDataError(
+                        "interface residue payload has an invalid edge"
+                    )
                 raw_r1, raw_r2, raw_distance = values
                 left_key = _residue_key(left_chain, raw_r1)
                 right_key = _residue_key(right_chain, raw_r2)
                 if left_key is None or right_key is None:
-                    raise PhysPPIDataError("contact payload has an invalid residue")
+                    raise PhysPPIDataError(
+                        "interface residue payload has an invalid residue"
+                    )
                 try:
                     distance = float(raw_distance)
                 except (TypeError, ValueError, OverflowError) as error:
                     raise PhysPPIDataError(
-                        "contact payload has an invalid distance"
+                        "interface residue payload has an invalid distance"
                     ) from error
                 if not np.isfinite(distance):
-                    raise PhysPPIDataError("contact payload has an invalid distance")
+                    raise PhysPPIDataError(
+                        "interface residue payload has an invalid distance"
+                    )
                 left = token_index.get(left_key)
                 right = token_index.get(right_key)
                 if left is None or right is None:
@@ -192,15 +207,20 @@ def iter_mappable_dmap_edges(
                 yield left_chain, right_chain, left, right, distance
 
 
-def build_contact_features(
+def build_interface_residue_features(
     dmap: Mapping[str, Sequence[Sequence[object]]],
     token_index: Mapping[tuple[str, int], int],
     cutoff: float,
 ) -> dict[str, Any]:
-    """Reduce dmap supervision to a symmetric boolean pair-contact target."""
+    """Reduce dmap supervision to a per-residue boolean interface mask.
+
+    A residue is an interface residue when it participates in at least one
+    cross-chain dmap edge whose distance does not exceed the cutoff.  The
+    cutoff is sampled per example (uniformly in [8, 18] by the adapter).
+    """
 
     n_tokens = _num_tokens(token_index)
-    pair_mask = np.zeros((n_tokens, n_tokens), dtype=bool)
+    interface_mask = np.zeros((n_tokens,), dtype=bool)
     try:
         threshold = float(cutoff)
     except (TypeError, ValueError, OverflowError):
@@ -213,14 +233,13 @@ def build_contact_features(
             and np.isfinite(distance)
             and distance <= threshold
         ):
-            pair_mask[left, right] = True
-            pair_mask[right, left] = True
-    np.fill_diagonal(pair_mask, False)
+            interface_mask[left] = True
+            interface_mask[right] = True
 
     return {
         "available": bool(dmap),
-        "valid": bool(pair_mask.any()),
-        "pair_mask": pair_mask,
+        "valid": bool(interface_mask.any()),
+        "interface_mask": interface_mask,
         "cutoff": threshold,
     }
 
@@ -231,11 +250,13 @@ def build_interaction_features(
     *,
     atom_array: object | None = None,
 ) -> dict[str, Any]:
-    """Build seven typed, symmetric interaction channels.
+    """Build five typed, symmetric interaction channels.
 
     A nonempty record sequence is available even when all endpoints fail
     validation.  ``valid`` indicates that at least one record maps to a known
-    interaction channel and both token endpoints.  Auxiliary distance fields
+    interaction channel and both token endpoints.  Source interaction kinds
+    outside the canonical five (waterbridge, halogen) are skipped, matching
+    the precomputed interaction-pair pipeline.  Auxiliary distance fields
     are independent: when ``atom_array`` is supplied, atom endpoints are
     resolved against the structure and the target is the centroid distance
     between the two complete atom groups. The canonical adapter always passes
@@ -244,7 +265,9 @@ def build_interaction_features(
     """
 
     n_tokens = _num_tokens(token_index)
-    type_mask = np.zeros((n_tokens, n_tokens, len(INTERACTION_TYPES)), dtype=bool)
+    type_mask = np.zeros(
+        (n_tokens, n_tokens, len(_INTERACTION_CHANNELS)), dtype=bool
+    )
     aux: list[
         tuple[
             int, int, int, float | None, tuple[str, ...] | None, tuple[str, ...] | None
@@ -267,7 +290,7 @@ def build_interaction_features(
         if pair is None:
             raise PhysPPIDataError("interaction payload has an invalid chain pair")
         if channel is None:
-            raise PhysPPIDataError("interaction payload has an invalid type")
+            continue
         left_chain, right_chain = pair
         left_key = _residue_key(left_chain, record.r1)
         right_key = _residue_key(right_chain, record.r2)
@@ -677,7 +700,7 @@ def build_membrane_target(
 
 __all__ = [
     "PhysPPIDataError",
-    "build_contact_features",
+    "build_interface_residue_features",
     "build_interaction_features",
     "build_membrane_target",
     "build_surface_features",

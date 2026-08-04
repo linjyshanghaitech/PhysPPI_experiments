@@ -19,7 +19,7 @@ REQUIRED_PACKAGE_PATHS = (
 )
 LEGACY_FINAL_FILES = (
     "conditioning.py",
-    "contact_encoder.py",
+    "interface_residue_encoder.py",
     "feature_injection.py",
     "interaction_auxiliary.py",
     "membrane_geometry.py",

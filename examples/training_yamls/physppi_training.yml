@@ -37,14 +37,14 @@ model_update:
     - train
   custom:
     settings:
-      training_scope: physppi_lora_assessment
+      training_scope: physppi_priors_only
       train_confidence_only: false
     architecture:
       physppi:
         enabled: true
         optional_prior_conditioner:
           enabled: true
-          num_interaction_types: 7
+          num_interaction_types: 5
         membrane_geometry:
           enabled: true
           normal_error_bins: 16
@@ -72,7 +72,7 @@ dataset_configs:
             enabled: true
         physppi:
           root: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/Q-BioLiP-10k-new
-          num_surface_neighbors: 128
+          num_surface_neighbors: 64
         loss:
           confidence_loss_names: [plddt, pde, pae]
           loss_weights:
@@ -99,7 +99,7 @@ dataset_configs:
             enabled: true
         physppi:
           root: /101045/jinyu/PPI/Prior_out/precomputed_mesh/cli_v3/AFDB-10k-1
-          num_surface_neighbors: 128
+          num_surface_neighbors: 64
         loss:
           confidence_loss_names: [plddt, pde, pae]
           loss_weights:

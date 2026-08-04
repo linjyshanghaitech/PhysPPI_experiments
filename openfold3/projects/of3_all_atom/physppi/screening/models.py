@@ -155,7 +155,7 @@ class AuditView(_StrictScreeningModel):
     schema_version: SchemaVersion = SCHEMA_VERSION
     crop_strategy: CropStrategy
     requested_level: RequestedLevel
-    contact_cutoff: float = Field(ge=8.0, le=18.0)
+    interface_cutoff: float = Field(ge=8.0, le=18.0)
     view_index: int = Field(ge=0)
     multichain_probe: bool = False
 

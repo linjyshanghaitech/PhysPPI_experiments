@@ -49,7 +49,7 @@ class TrainStabilitySmokeConfig:
     )
     lora: Mapping[str, Any] = field(
         default_factory=lambda: {
-            "enabled": True,
+            "enabled": False,
             "always_on": True,
             "target_modules": ("lora_adapter",),
         }
@@ -57,7 +57,7 @@ class TrainStabilitySmokeConfig:
 
 
 def production_stability_config(output: str | Path) -> TrainStabilitySmokeConfig:
-    """Return the production-like freeze plus always-on-LoRA smoke config."""
+    """Return the production-like priors-only smoke config."""
 
     return TrainStabilitySmokeConfig(output=Path(output))
 
@@ -167,7 +167,7 @@ def build_prior_batch(
     token_mask = torch_module.ones(1, n_tokens, dtype=torch_module.bool, device=device)
     batch: dict[str, Any] = {
         "token_mask": token_mask,
-        "physppi_contact_token_mask": torch_module.zeros(
+        "physppi_interface_residue_mask": torch_module.zeros(
             1, n_tokens, dtype=torch_module.bool, device=device
         ),
         "physppi_interaction_type_mask": torch_module.zeros(
@@ -190,7 +190,7 @@ def build_prior_batch(
         ),
     }
     if active:
-        batch["physppi_contact_token_mask"][:, :2] = True
+        batch["physppi_interface_residue_mask"][:, :2] = True
         batch["physppi_interaction_type_mask"][:, 0, 1, 0] = True
         batch["physppi_interaction_type_mask"][:, 1, 0, 0] = True
         batch["physppi_surface_mask"][:, :, :2] = True
@@ -198,7 +198,7 @@ def build_prior_batch(
         batch["physppi_surface_features"][:, :, :2, :] = 0.25
         batch["physppi_surface_local_coords"][:, :, :2, 0] = 0.5
         batch["physppi_tm_token_mask"][:, 0] = True
-    for slot in ("contact", "interaction", "surface", "tm"):
+    for slot in ("interface_residue", "interaction", "surface", "tm"):
         for name, value in _slot_flags(torch_module, active, device).items():
             batch[f"physppi_{slot}_{name}"] = value
     return batch
@@ -226,6 +226,8 @@ class TrainStabilityProbe:
                 )
                 for parameter in self.base_projection.parameters():
                     parameter.requires_grad_(False)
+                for parameter in self.lora_adapter.parameters():
+                    parameter.requires_grad_(bool(config.lora["enabled"]))
 
             def forward(self, batch):
                 token_mask = batch["token_mask"]
@@ -236,7 +238,12 @@ class TrainStabilityProbe:
                     dtype=torch.float32,
                 ).reshape(batch_size, n_tokens, config.c_s)
                 x = x / max(float(config.c_s * n_tokens), 1.0)
-                s_init = self.base_projection(x) + self.lora_adapter(x)
+                lora_out = (
+                    self.lora_adapter(x)
+                    if config.lora["enabled"]
+                    else torch.zeros_like(x)
+                )
+                s_init = self.base_projection(x) + lora_out
                 z_init = torch.zeros(
                     batch_size,
                     n_tokens,

@@ -15,10 +15,10 @@ def _active_surface_batch() -> dict[str, torch.Tensor]:
         "physppi_surface_selected": torch.tensor([True]),
         "physppi_surface_valid": torch.tensor([True]),
         "physppi_surface_active": torch.tensor([True]),
-        "physppi_surface_local_coords": torch.zeros(1, 2, 128, 3),
-        "physppi_surface_features": torch.zeros(1, 2, 128, 6),
-        "physppi_surface_mask": torch.ones(1, 2, 128, dtype=torch.bool),
-        "physppi_surface_charge_mask": torch.ones(1, 2, 128, dtype=torch.bool),
+        "physppi_surface_local_coords": torch.zeros(1, 2, 64, 3),
+        "physppi_surface_features": torch.zeros(1, 2, 64, 6),
+        "physppi_surface_mask": torch.ones(1, 2, 64, dtype=torch.bool),
+        "physppi_surface_charge_mask": torch.ones(1, 2, 64, dtype=torch.bool),
     }
 
 
@@ -44,7 +44,7 @@ def test_injection_copies_surface_charge_mask():
     assert "physppi_surface_charge_mask" in out
     assert torch.equal(
         out["physppi_surface_charge_mask"],
-        torch.ones(1, 2, 128, dtype=torch.bool),
+        torch.ones(1, 2, 64, dtype=torch.bool),
     )
 
 
@@ -55,31 +55,31 @@ def test_injection_copies_tm_source_provenance():
     assert torch.equal(out["physppi_tm_provenance"], torch.tensor([True]))
 
 
-def test_active_contact_requires_symmetric_pair_mask():
+def test_active_interface_residue_requires_per_token_boolean_mask():
     batch = {
         "token_mask": torch.ones(1, 2, dtype=torch.bool),
-        "physppi_contact_available": torch.tensor([True]),
-        "physppi_contact_selected": torch.tensor([True]),
-        "physppi_contact_valid": torch.tensor([True]),
-        "physppi_contact_active": torch.tensor([True]),
-        "physppi_contact_pair_mask": torch.tensor([[[False, True], [True, False]]]),
+        "physppi_interface_residue_available": torch.tensor([True]),
+        "physppi_interface_residue_selected": torch.tensor([True]),
+        "physppi_interface_residue_valid": torch.tensor([True]),
+        "physppi_interface_residue_active": torch.tensor([True]),
+        "physppi_interface_residue_mask": torch.tensor([[True, False]]),
     }
 
     validate_optional_prior_features(batch)
 
-    asymmetric = dict(batch)
-    asymmetric["physppi_contact_pair_mask"] = torch.tensor(
-        [[[False, True], [False, False]]]
-    )
-    with pytest.raises(ValueError, match="symmetric"):
-        validate_optional_prior_features(asymmetric)
-
     non_boolean = dict(batch)
-    non_boolean["physppi_contact_pair_mask"] = batch[
-        "physppi_contact_pair_mask"
+    non_boolean["physppi_interface_residue_mask"] = batch[
+        "physppi_interface_residue_mask"
     ].float()
     with pytest.raises(ValueError, match="boolean"):
         validate_optional_prior_features(non_boolean)
+
+    wrong_shape = dict(batch)
+    wrong_shape["physppi_interface_residue_mask"] = torch.tensor(
+        [[[True, False], [False, True]]]
+    )
+    with pytest.raises(ValueError, match="trailing shape"):
+        validate_optional_prior_features(wrong_shape)
 
 
 def test_injection_rejects_legacy_model_input_key():
@@ -92,12 +92,16 @@ def test_injection_rejects_legacy_model_input_key():
         )
 
 
-def test_contact_cutoff_audit_metadata_is_forbidden_at_model_boundary():
+def test_interface_residue_cutoff_audit_metadata_is_forbidden_at_model_boundary():
     base = {"token_mask": torch.ones(1, 2, dtype=torch.bool)}
-    cutoff = {"physppi_contact_cutoff": torch.tensor([12.0])}
+    cutoff = {"physppi_interface_residue_cutoff": torch.tensor([12.0])}
 
-    assert "physppi_contact_cutoff" not in PHYS_PPI_KEYS
-    with pytest.raises(ValueError, match="audit-only.*physppi_contact_cutoff"):
+    assert "physppi_interface_residue_cutoff" not in PHYS_PPI_KEYS
+    with pytest.raises(
+        ValueError, match="audit-only.*physppi_interface_residue_cutoff"
+    ):
         validate_optional_prior_features({**base, **cutoff})
-    with pytest.raises(ValueError, match="audit-only.*physppi_contact_cutoff"):
+    with pytest.raises(
+        ValueError, match="audit-only.*physppi_interface_residue_cutoff"
+    ):
         inject_physppi_features(base, cutoff)

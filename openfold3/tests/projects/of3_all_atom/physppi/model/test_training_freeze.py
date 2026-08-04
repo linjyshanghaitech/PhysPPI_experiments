@@ -53,8 +53,8 @@ class _MinimalWrapper:
         self._freeze_model_params = types.MethodType(
             OpenFold3AllAtom._freeze_model_params, self
         )
-        self._freeze_model_params_for_physppi_and_lora = types.MethodType(
-            OpenFold3AllAtom._freeze_model_params_for_physppi_and_lora, self
+        self._freeze_model_params_for_physppi_priors = types.MethodType(
+            OpenFold3AllAtom._freeze_model_params_for_physppi_priors, self
         )
         self._get_physppi_only_exempt_submodules = types.MethodType(
             OpenFold3AllAtom._get_physppi_only_exempt_submodules, self
@@ -70,7 +70,7 @@ class _MinimalWrapper:
 def _physppi_config(enabled=True):
     cfg = copy.deepcopy(model_config)
     cfg.architecture.physppi.enabled = enabled
-    cfg.settings.training_scope = "physppi_lora_assessment"
+    cfg.settings.training_scope = "physppi_priors_only"
     cfg.architecture.lora.enabled = True
     return cfg
 
@@ -79,11 +79,11 @@ def test_physppi_training_scope_defaults_to_baseline():
     assert model_config.settings.training_scope == "baseline"
 
 
-def test_physppi_freeze_leaves_only_whitelist_and_lora_trainable():
+def test_physppi_freeze_leaves_only_whitelist_trainable():
     cfg = _physppi_config()
     model = _DummyModel(cfg)
     wrapper = _MinimalWrapper(model)
-    wrapper._freeze_model_params_for_physppi_and_lora()
+    wrapper._freeze_model_params_for_physppi_priors()
 
     trainable = [
         name for name, param in model.named_parameters() if param.requires_grad
@@ -102,11 +102,10 @@ def test_physppi_freeze_leaves_only_whitelist_and_lora_trainable():
     assert trainable
     assert any(name.startswith("physppi_conditioning.") for name in trainable)
     assert any(name.startswith("interaction_distance_head.") for name in trainable)
-    assert any(".lora_A" in name or ".lora_B" in name for name in trainable)
     assert all(
-        name.startswith(allowed) or ".lora_A" in name or ".lora_B" in name
-        for name in trainable
+        name.startswith(allowed) for name in trainable
     )
+    assert not any(".lora_A" in name or ".lora_B" in name for name in trainable)
     assert not any(name.startswith("aux_heads.distogram.") for name in trainable)
     assert not any(name.startswith("original_backbone.") for name in trainable)
     assert "lora.lora_C" not in trainable
@@ -115,18 +114,21 @@ def test_physppi_freeze_leaves_only_whitelist_and_lora_trainable():
 
 
 def test_physppi_freeze_is_independent_of_optional_slot_activation():
-    for enabled_optional_slots in ((), ("contact", "interaction", "surface", "tm")):
+    for enabled_optional_slots in (
+        (),
+        ("interface_residue", "interaction", "surface", "tm"),
+    ):
         cfg = _physppi_config()
         cfg.architecture.physppi.enabled_optional_slots = list(enabled_optional_slots)
         model = _DummyModel(cfg)
         wrapper = _MinimalWrapper(model)
-        wrapper._freeze_model_params_for_physppi_and_lora()
+        wrapper._freeze_model_params_for_physppi_priors()
 
         trainable = {
             name for name, param in model.named_parameters() if param.requires_grad
         }
         assert any(name.startswith("aux_heads.pde.") for name in trainable)
-        assert any(name.endswith("lora_A") for name in trainable)
+        assert not any(name.endswith("lora_A") for name in trainable)
 
 
 def test_confidence_identification_includes_pde():
@@ -189,7 +191,7 @@ def test_physppi_training_yaml_enables_explicit_scope():
         (repo_root / "examples/training_yamls/physppi_training.yml").read_text()
     )
     settings = data["model_update"]["custom"]["settings"]
-    assert settings["training_scope"] == "physppi_lora_assessment"
+    assert settings["training_scope"] == "physppi_priors_only"
     assert settings.get("train_confidence_only", False) is False
 
 

@@ -35,7 +35,6 @@ from openfold3.core.model.latent.pairformer import PairFormerStack
 from openfold3.core.model.latent.template_module import TemplateEmbedderAllAtom
 from openfold3.core.model.lora import (
     apply_lora_to_linear_modules,
-    is_lora_parameter_name,
 )
 from openfold3.core.model.primitives import LayerNorm, Linear
 from openfold3.core.model.structure.diffusion_module import (
@@ -103,12 +102,21 @@ class OpenFold3(nn.Module):
         )
         physppi_config = getattr(self.config.architecture, "physppi", None)
         physppi_enabled = physppi_config is not None and physppi_config.enabled
+        prior_conditioner_config = (
+            getattr(physppi_config, "optional_prior_conditioner", None)
+            if physppi_enabled
+            else None
+        )
+        prior_conditioner_enabled = bool(
+            prior_conditioner_config is None
+            or prior_conditioner_config.get("enabled", True)
+        )
         self.physppi_conditioning = (
             OptionalPriorConditioner(
                 c_s=self.shared.c_s,
                 c_z=self.shared.c_z,
             )
-            if physppi_enabled
+            if physppi_enabled and prior_conditioner_enabled
             else None
         )
         membrane_config = (
@@ -231,13 +239,13 @@ class OpenFold3(nn.Module):
                     )
 
         training_scope = self.settings.get("training_scope", "baseline")
-        if physppi_enabled and training_scope == "physppi_lora_assessment":
+        if physppi_enabled and training_scope == "physppi_priors_only":
             self._configure_physppi_trainable_boundary()
 
         self.register_buffer("version_tensor", MODEL_VERSION)
 
     def _configure_physppi_trainable_boundary(self) -> None:
-        """Freeze OF3 and expose only the PhysPPI/assessment/LoRA whitelist."""
+        """Freeze OF3 and expose only the PhysPPI/assessment whitelist."""
 
         for parameter in self.parameters():
             parameter.requires_grad = False
@@ -258,9 +266,6 @@ class OpenFold3(nn.Module):
             if module is not None:
                 for parameter in module.parameters():
                     parameter.requires_grad = True
-        for name, parameter in self.named_parameters():
-            if is_lora_parameter_name(name):
-                parameter.requires_grad = True
 
         # Keep this boundary data-independent: optional-slot availability is a
         # batch property and must never change which parameters are trainable.
@@ -268,10 +273,7 @@ class OpenFold3(nn.Module):
             name
             for name, parameter in self.named_parameters()
             if parameter.requires_grad
-            and not (
-                name.startswith(PHYSPPI_TRAINABLE_PREFIXES)
-                or is_lora_parameter_name(name)
-            )
+            and not name.startswith(PHYSPPI_TRAINABLE_PREFIXES)
         ]
         if unexpected:
             raise ValueError(

@@ -44,10 +44,11 @@ def test_latest_contract_rejects_stale_feature_shapes():
 
     features = feature_dict.feat
 
-    assert features["physppi_contact_pair_mask"] == [NUM_TOKENS, NUM_TOKENS]
-    assert features["physppi_surface_features"] == [NUM_TOKENS, 128, 6]
+    assert features["physppi_interface_residue_mask"] == [NUM_TOKENS]
+    assert features["physppi_surface_features"] == [NUM_TOKENS, 64, 6]
     assert "physppi_contact_token_mask" not in features
     assert "physppi_surface_interface_mask" not in features
+    assert "physppi_contact_pair_mask" not in features
     assert "physppi_contact_mask" not in features
     assert "physppi_paired_msa_selected" not in features
 
@@ -58,7 +59,8 @@ def test_feature_injection_boundary_uses_latest_contract_keys():
         validate_optional_prior_features,
     )
 
-    assert "physppi_contact_pair_mask" in PHYS_PPI_KEYS
+    assert "physppi_interface_residue_mask" in PHYS_PPI_KEYS
+    assert "physppi_contact_pair_mask" not in PHYS_PPI_KEYS
     assert "physppi_contact_token_mask" not in PHYS_PPI_KEYS
     assert "physppi_surface_interface_mask" not in PHYS_PPI_KEYS
     assert "physppi_contact_mask" not in PHYS_PPI_KEYS
@@ -67,19 +69,19 @@ def test_feature_injection_boundary_uses_latest_contract_keys():
 
     batch = {
         "token_mask": torch.ones(1, 2, dtype=torch.bool),
-        "physppi_contact_available": torch.tensor([True]),
-        "physppi_contact_selected": torch.tensor([True]),
-        "physppi_contact_valid": torch.tensor([True]),
-        "physppi_contact_active": torch.tensor([True]),
-        "physppi_contact_pair_mask": torch.tensor([[[False, True], [True, False]]]),
+        "physppi_interface_residue_available": torch.tensor([True]),
+        "physppi_interface_residue_selected": torch.tensor([True]),
+        "physppi_interface_residue_valid": torch.tensor([True]),
+        "physppi_interface_residue_active": torch.tensor([True]),
+        "physppi_interface_residue_mask": torch.tensor([[True, False]]),
         "physppi_surface_available": torch.tensor([True]),
         "physppi_surface_selected": torch.tensor([True]),
         "physppi_surface_valid": torch.tensor([True]),
         "physppi_surface_active": torch.tensor([True]),
-        "physppi_surface_local_coords": torch.zeros(1, 2, 128, 3),
-        "physppi_surface_features": torch.zeros(1, 2, 128, 6),
-        "physppi_surface_mask": torch.ones(1, 2, 128, dtype=torch.bool),
-        "physppi_surface_charge_mask": torch.ones(1, 2, 128, dtype=torch.bool),
+        "physppi_surface_local_coords": torch.zeros(1, 2, 64, 3),
+        "physppi_surface_features": torch.zeros(1, 2, 64, 6),
+        "physppi_surface_mask": torch.ones(1, 2, 64, dtype=torch.bool),
+        "physppi_surface_charge_mask": torch.ones(1, 2, 64, dtype=torch.bool),
         "physppi_tm_available": torch.tensor([True]),
         "physppi_tm_selected": torch.tensor([True]),
         "physppi_tm_valid": torch.tensor([True]),
@@ -96,10 +98,10 @@ def _active_surface_batch() -> dict[str, torch.Tensor]:
         "physppi_surface_selected": torch.tensor([True]),
         "physppi_surface_valid": torch.tensor([True]),
         "physppi_surface_active": torch.tensor([True]),
-        "physppi_surface_local_coords": torch.zeros(1, 2, 128, 3),
-        "physppi_surface_features": torch.zeros(1, 2, 128, 6),
-        "physppi_surface_mask": torch.ones(1, 2, 128, dtype=torch.bool),
-        "physppi_surface_charge_mask": torch.ones(1, 2, 128, dtype=torch.bool),
+        "physppi_surface_local_coords": torch.zeros(1, 2, 64, 3),
+        "physppi_surface_features": torch.zeros(1, 2, 64, 6),
+        "physppi_surface_mask": torch.ones(1, 2, 64, dtype=torch.bool),
+        "physppi_surface_charge_mask": torch.ones(1, 2, 64, dtype=torch.bool),
     }
 
 

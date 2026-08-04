@@ -25,7 +25,7 @@ from typing import Any
 
 import yaml
 
-TRAINING_SCOPE = "physppi_lora_assessment"
+TRAINING_SCOPE = "physppi_priors_only"
 LORA_GROUPS = [
     {
         "patterns": [r"^template_embedder\.linear_t$"],
@@ -158,7 +158,7 @@ def _configure_dataset(
             "manifest": manifest,
             "manifest_dataset_key": manifest_dataset_key,
             "manifest_partition": "train_ids",
-            "num_surface_neighbors": 128,
+            "num_surface_neighbors": 64,
         }
     )
     config["loss"] = {
@@ -215,7 +215,7 @@ def _apply_contract(
     physppi.setdefault("optional_prior_conditioner", {})["enabled"] = True
     physppi.setdefault("membrane_geometry", {})["enabled"] = True
     architecture["lora"] = {
-        "enabled": True,
+        "enabled": False,
         "target_preset": "physppi_always_on",
         "target_patterns": [],
         "groups": copy.deepcopy(LORA_GROUPS),
@@ -378,7 +378,7 @@ def validate_semantic_config(
         "interaction auxiliary",
     )
     expected_lora = {
-        "enabled": True,
+        "enabled": False,
         "target_preset": "physppi_always_on",
         "target_patterns": [],
         "groups": LORA_GROUPS,
@@ -435,7 +435,7 @@ def validate_semantic_config(
             physppi["manifest_partition"], "train_ids", f"{name} manifest partition"
         )
         _require_equal(
-            physppi["num_surface_neighbors"], 128, f"{name} surface neighbors"
+            physppi["num_surface_neighbors"], 64, f"{name} surface neighbors"
         )
         _require_equal(
             dataset_config["loss"],

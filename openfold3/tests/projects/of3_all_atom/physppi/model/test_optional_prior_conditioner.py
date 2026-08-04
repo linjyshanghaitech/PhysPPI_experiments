@@ -11,20 +11,12 @@ from openfold3.projects.of3_all_atom.physppi.model.tm_topology import TMTopology
 
 
 def _conditioner_batch(*, active: bool) -> dict[str, torch.Tensor]:
-    interaction = torch.zeros(1, 3, 3, 7, dtype=torch.bool)
+    interaction = torch.zeros(1, 3, 3, 5, dtype=torch.bool)
     interaction[0, 1, 2, 2] = True
     interaction[0, 2, 1, 2] = True
     return {
-        "physppi_contact_pair_mask": torch.tensor(
-            [
-                [
-                    [False, True, False],
-                    [True, False, False],
-                    [False, False, False],
-                ]
-            ]
-        ),
-        "physppi_contact_active": torch.tensor([active]),
+        "physppi_interface_residue_mask": torch.tensor([[True, True, False]]),
+        "physppi_interface_residue_active": torch.tensor([active]),
         "physppi_interaction_type_mask": interaction,
         "physppi_interaction_active": torch.tensor([active]),
         "physppi_surface_local_coords": torch.zeros(1, 3, 2, 3),
@@ -37,7 +29,7 @@ def _conditioner_batch(*, active: bool) -> dict[str, torch.Tensor]:
     }
 
 
-def test_conditioner_initial_pair_adapters_are_exact_zero():
+def test_conditioner_initial_adapters_are_exact_zero():
     conditioner = OptionalPriorConditioner(c_s=16, c_z=8)
     s = torch.zeros(1, 3, 16)
     z = torch.zeros(1, 3, 3, 8)
@@ -53,16 +45,18 @@ def test_conditioner_initial_pair_adapters_are_exact_zero():
     )
     assert torch.equal(out.s_init, s)
     assert torch.equal(out.z_init, z)
-    assert torch.equal(out.contact_pair_delta, torch.zeros_like(out.contact_pair_delta))
+    assert torch.equal(
+        out.interface_single_delta, torch.zeros_like(out.interface_single_delta)
+    )
     assert torch.equal(
         out.interaction_pair_delta, torch.zeros_like(out.interaction_pair_delta)
     )
 
 
-def test_open_contact_and_interaction_change_only_pair_representation():
+def test_open_interface_and_interaction_change_single_and_pair_representations():
     conditioner = OptionalPriorConditioner(c_s=16, c_z=8)
     with torch.no_grad():
-        conditioner.contact.gate.fill_(0.5)
+        conditioner.interface_residue.gate.fill_(0.5)
         conditioner.interaction.gate.fill_(0.5)
     s = torch.randn(1, 3, 16)
     z = torch.randn(1, 3, 3, 8)
@@ -76,16 +70,18 @@ def test_open_contact_and_interaction_change_only_pair_representation():
         token_mask=torch.ones(1, 3),
         pair_mask=torch.ones(1, 3, 3),
     )
-    assert torch.equal(out.s_init, s)
+    assert not torch.equal(out.s_init, s)
     assert not torch.equal(out.z_init, z)
     torch.testing.assert_close(
-        out.z_init - z,
-        out.contact_pair_delta + out.interaction_pair_delta,
+        out.s_init - s,
+        out.interface_single_delta,
     )
     torch.testing.assert_close(
-        out.contact_pair_delta,
-        out.contact_pair_delta.transpose(-3, -2),
+        out.z_init - z,
+        out.interaction_pair_delta,
     )
+    assert torch.count_nonzero(out.interface_single_delta[0, 0]) > 0
+    assert torch.count_nonzero(out.interface_single_delta[0, 2]) == 0
     torch.testing.assert_close(
         out.interaction_pair_delta,
         out.interaction_pair_delta.transpose(-3, -2),
@@ -105,7 +101,9 @@ def test_inactive_optional_slots_are_exact_noops():
     )
     assert torch.equal(out.s_init, s)
     assert torch.equal(out.z_init, z)
-    assert torch.equal(out.contact_pair_delta, torch.zeros_like(out.contact_pair_delta))
+    assert torch.equal(
+        out.interface_single_delta, torch.zeros_like(out.interface_single_delta)
+    )
     assert torch.equal(
         out.interaction_pair_delta, torch.zeros_like(out.interaction_pair_delta)
     )

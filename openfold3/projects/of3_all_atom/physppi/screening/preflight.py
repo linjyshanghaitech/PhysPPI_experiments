@@ -416,13 +416,13 @@ def validate_physppi_features(
             )
         ]
 
-    contact = features.get("physppi_contact_pair_mask")
-    contact_shape = _shape(contact)
+    interface = features.get("physppi_interface_residue_mask")
+    interface_shape = _shape(interface)
     interaction_shape = _shape(features.get("physppi_interaction_type_mask"))
     interaction_distance_shape = _shape(features.get("physppi_interaction_distance"))
     interaction_valid_shape = _shape(features.get("physppi_interaction_aux_valid"))
     if (
-        contact_shape != (n_tokens, n_tokens)
+        interface_shape != (n_tokens,)
         or interaction_shape != (n_tokens, n_tokens, 5)
         or interaction_distance_shape != (n_tokens, n_tokens)
         or interaction_valid_shape != (n_tokens, n_tokens)
@@ -430,42 +430,43 @@ def validate_physppi_features(
         return [
             _finding(
                 "interaction_shape",
-                "pair contact and interaction auxiliary labels must align to tokens",
+                "interface residue and interaction auxiliary labels must align "
+                "to tokens",
             )
         ]
-    contact_values = (
-        contact.detach().cpu().numpy()
-        if isinstance(contact, torch.Tensor)
-        else np.asarray(contact)
+    interface_values = (
+        interface.detach().cpu().numpy()
+        if isinstance(interface, torch.Tensor)
+        else np.asarray(interface)
     )
-    if not np.array_equal(contact_values, contact_values.T) or np.any(
-        np.diag(contact_values)
-    ):
+    if interface_values.dtype != np.bool_ and not np.isin(
+        interface_values, (0, 1)
+    ).all():
         return [
             _finding(
                 "interaction_shape",
-                "contact pair mask must be symmetric with a false diagonal",
+                "interface residue mask must be boolean",
             )
         ]
 
     if (
-        _shape(features.get("physppi_surface_local_coords")) != (n_tokens, 128, 3)
-        or _shape(features.get("physppi_surface_features")) != (n_tokens, 128, 6)
-        or _shape(features.get("physppi_surface_mask")) != (n_tokens, 128)
-        or _shape(features.get("physppi_surface_charge_mask")) != (n_tokens, 128)
+        _shape(features.get("physppi_surface_local_coords")) != (n_tokens, 64, 3)
+        or _shape(features.get("physppi_surface_features")) != (n_tokens, 64, 6)
+        or _shape(features.get("physppi_surface_mask")) != (n_tokens, 64)
+        or _shape(features.get("physppi_surface_charge_mask")) != (n_tokens, 64)
     ):
-        return [_finding("surface_shape", "surface features must be [N, 128, ...]")]
+        return [_finding("surface_shape", "surface features must be [N, 64, ...]")]
 
     requested_level = _scalar_int(features.get("physppi_prior_requested_level"))
     effective_level = _scalar_int(features.get("physppi_prior_effective_level"))
     occurrence_seed = _scalar_int(features.get("physppi_occurrence_seed"))
     active_values = [
         _scalar_bool(features.get(f"physppi_{slot}_active"))
-        for slot in ("contact", "interaction", "surface", "tm")
+        for slot in ("interface_residue", "interaction", "surface", "tm")
     ]
     state_values = [
         _scalar_bool(features.get(f"physppi_{slot}_{state}"))
-        for slot in ("contact", "interaction", "surface", "tm")
+        for slot in ("interface_residue", "interaction", "surface", "tm")
         for state in ("available", "selected", "valid", "provenance")
     ]
     expected_active = (
@@ -490,7 +491,9 @@ def validate_physppi_features(
                 "prior levels and slot states must form one cumulative L0-L4 prefix",
             )
         ]
-    for slot_index, slot in enumerate(("contact", "interaction", "surface", "tm")):
+    for slot_index, slot in enumerate(
+        ("interface_residue", "interaction", "surface", "tm")
+    ):
         available = _scalar_bool(features[f"physppi_{slot}_available"])
         selected = _scalar_bool(features[f"physppi_{slot}_selected"])
         valid = _scalar_bool(features[f"physppi_{slot}_valid"])
@@ -586,7 +589,7 @@ def _sample_error(sample_id: str, crop: str, stage: str, exc: BaseException) -> 
 
 
 def _validate_collated(batch: Mapping[str, object], n_tokens: int) -> list[Finding]:
-    if _shape(batch.get("physppi_surface_local_coords")) != (1, n_tokens, 128, 3):
+    if _shape(batch.get("physppi_surface_local_coords")) != (1, n_tokens, 64, 3):
         return [
             _finding(
                 "collated_shape",
@@ -594,7 +597,7 @@ def _validate_collated(batch: Mapping[str, object], n_tokens: int) -> list[Findi
                 stage="collator",
             )
         ]
-    if _shape(batch.get("physppi_surface_features")) != (1, n_tokens, 128, 6):
+    if _shape(batch.get("physppi_surface_features")) != (1, n_tokens, 64, 6):
         return [
             _finding(
                 "collated_shape",
@@ -602,7 +605,7 @@ def _validate_collated(batch: Mapping[str, object], n_tokens: int) -> list[Findi
                 stage="collator",
             )
         ]
-    if _shape(batch.get("physppi_surface_mask")) != (1, n_tokens, 128):
+    if _shape(batch.get("physppi_surface_mask")) != (1, n_tokens, 64):
         return [
             _finding(
                 "collated_shape",
@@ -610,7 +613,7 @@ def _validate_collated(batch: Mapping[str, object], n_tokens: int) -> list[Findi
                 stage="collator",
             )
         ]
-    if _shape(batch.get("physppi_surface_charge_mask")) != (1, n_tokens, 128):
+    if _shape(batch.get("physppi_surface_charge_mask")) != (1, n_tokens, 64):
         return [
             _finding(
                 "collated_shape",
@@ -628,7 +631,7 @@ def _validate_collated(batch: Mapping[str, object], n_tokens: int) -> list[Findi
             )
         ]
     expected_pair_shapes = {
-        "physppi_contact_pair_mask": (1, n_tokens, n_tokens),
+        "physppi_interface_residue_mask": (1, n_tokens),
         "physppi_interaction_type_mask": (1, n_tokens, n_tokens, 5),
         "physppi_interaction_distance": (1, n_tokens, n_tokens),
         "physppi_interaction_aux_valid": (1, n_tokens, n_tokens),
@@ -698,7 +701,7 @@ def _preflight_sample(
         else:
             with current_dataset.audit_prior_view(
                 requested_level=audit_view.requested_level,
-                contact_cutoff=audit_view.contact_cutoff,
+                interface_cutoff=audit_view.interface_cutoff,
             ):
                 features = current_dataset[index]
     except (MemoryError, TimeoutError, KeyboardInterrupt, SystemExit) as exc:

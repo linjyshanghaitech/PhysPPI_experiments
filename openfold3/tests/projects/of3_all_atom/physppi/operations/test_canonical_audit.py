@@ -223,7 +223,7 @@ def test_prior_only_one_forces_available_slots_and_threads_charge_mask(
 
     class Conditioner:
         def __call__(self, *, s_init, z_init, batch, token_mask, pair_mask):
-            assert batch["physppi_contact_active"].tolist() == [True]
+            assert batch["physppi_interface_residue_active"].tolist() == [True]
             assert batch["physppi_interaction_active"].tolist() == [True]
             assert batch["physppi_surface_active"].tolist() == [True]
             assert batch["physppi_tm_active"].tolist() == [True]
@@ -259,10 +259,10 @@ def test_prior_only_one_forces_available_slots_and_threads_charge_mask(
     )
     monkeypatch.setattr(
         smoke,
-        "build_contact_features",
+        "build_interface_residue_features",
         lambda *args, **kwargs: {
-            "mask": np.ones((2, 2), dtype=bool),
-            "surface_interface_mask": np.ones(2, dtype=bool),
+            "interface_mask": np.ones(2, dtype=bool),
+            "valid": True,
         },
     )
     monkeypatch.setattr(

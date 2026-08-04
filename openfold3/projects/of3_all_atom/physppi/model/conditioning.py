@@ -7,8 +7,8 @@ from typing import NamedTuple
 import torch
 from torch import nn
 
-from openfold3.projects.of3_all_atom.physppi.model.contact_encoder import (
-    ContactPairEncoder,
+from openfold3.projects.of3_all_atom.physppi.model.interface_residue_encoder import (
+    InterfaceResidueEncoder,
 )
 from openfold3.projects.of3_all_atom.physppi.model.pair_constraints import (
     InteractionPairEncoder,
@@ -26,7 +26,7 @@ class OptionalPriorOutput(NamedTuple):
     z_init: torch.Tensor
     membrane_on: torch.Tensor
     tm_token_mask: torch.Tensor
-    contact_pair_delta: torch.Tensor
+    interface_single_delta: torch.Tensor
     interaction_pair_delta: torch.Tensor
     surface_single_delta: torch.Tensor
     tm_single_delta: torch.Tensor
@@ -37,7 +37,7 @@ class OptionalPriorConditioner(nn.Module):
 
     def __init__(self, c_s: int, c_z: int, num_interaction_types: int = 5) -> None:
         super().__init__()
-        self.contact = ContactPairEncoder(c_z=c_z)
+        self.interface_residue = InterfaceResidueEncoder(c_s=c_s)
         self.interaction = InteractionPairEncoder(
             c_z=c_z,
             num_interaction_types=num_interaction_types,
@@ -54,10 +54,10 @@ class OptionalPriorConditioner(nn.Module):
         token_mask: torch.Tensor,
         pair_mask: torch.Tensor,
     ) -> OptionalPriorOutput:
-        contact_pair_delta = self.contact(
-            payload=batch.get("physppi_contact_pair_mask"),
-            active=batch.get("physppi_contact_active", False),
-            pair_mask=pair_mask,
+        interface_single_delta = self.interface_residue(
+            payload=batch.get("physppi_interface_residue_mask"),
+            active=batch.get("physppi_interface_residue_active", False),
+            token_mask=token_mask,
         )
         interaction_pair_delta = self.interaction(
             payload=batch.get("physppi_interaction_type_mask"),
@@ -87,20 +87,25 @@ class OptionalPriorConditioner(nn.Module):
             device=s_init.device,
             dtype=s_init.dtype,
         )
-        contact_pair_delta = contact_pair_delta.to(
-            device=z_init.device,
-            dtype=z_init.dtype,
+        interface_single_delta = interface_single_delta.to(
+            device=s_init.device,
+            dtype=s_init.dtype,
         )
         interaction_pair_delta = interaction_pair_delta.to(
             device=z_init.device,
             dtype=z_init.dtype,
         )
         return OptionalPriorOutput(
-            s_init=s_init + surface_single_delta + tm_single_delta,
-            z_init=z_init + contact_pair_delta + interaction_pair_delta,
+            s_init=(
+                s_init
+                + interface_single_delta
+                + surface_single_delta
+                + tm_single_delta
+            ),
+            z_init=z_init + interaction_pair_delta,
             membrane_on=membrane_on,
             tm_token_mask=effective_tm_mask,
-            contact_pair_delta=contact_pair_delta,
+            interface_single_delta=interface_single_delta,
             interaction_pair_delta=interaction_pair_delta,
             surface_single_delta=surface_single_delta,
             tm_single_delta=tm_single_delta,

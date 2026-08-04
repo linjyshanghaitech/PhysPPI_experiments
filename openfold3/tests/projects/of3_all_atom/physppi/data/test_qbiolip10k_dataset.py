@@ -856,16 +856,16 @@ def test_adapter_emits_latest_contract_feature_keys(monkeypatch):
     def fake_interaction(*args, **kwargs):
         interaction_call["atom_array"] = kwargs.get("atom_array")
         return {
-            "type_mask": np.zeros((2, 2, 7), dtype=bool),
+            "type_mask": np.zeros((2, 2, 5), dtype=bool),
             "valid": True,
             "aux": ((0, 1, 0, 3.5, ("N",), ("O",)),),
         }
 
     monkeypatch.setattr(
         module,
-        "build_contact_features",
+        "build_interface_residue_features",
         lambda *args, **kwargs: {
-            "pair_mask": np.asarray([[False, True], [True, False]], dtype=bool),
+            "interface_mask": np.asarray([True, True], dtype=bool),
             "valid": True,
         },
     )
@@ -920,11 +920,8 @@ def test_adapter_emits_latest_contract_feature_keys(monkeypatch):
 
     assert "physppi_contact_mask" not in result
     assert "physppi_contact_token_mask" not in result
-    assert result["physppi_contact_pair_mask"].shape == (2, 2)
-    assert result["physppi_contact_pair_mask"].tolist() == [
-        [False, True],
-        [True, False],
-    ]
+    assert result["physppi_interface_residue_mask"].shape == (2,)
+    assert result["physppi_interface_residue_mask"].tolist() == [True, True]
     assert result["physppi_surface_features"].shape == (2, 128, 6)
     assert result["physppi_surface_features"][0, 0].tolist() == [0, 1, 2, 3, 4, 5]
     assert interaction_call["atom_array"] is atom_array
@@ -955,9 +952,9 @@ def test_adapter_truncates_later_slots_after_invalid_middle_prior(monkeypatch):
 
     monkeypatch.setattr(
         module,
-        "build_contact_features",
+        "build_interface_residue_features",
         lambda *args, **kwargs: {
-            "pair_mask": np.asarray([[False, True], [True, False]], dtype=bool),
+            "interface_mask": np.asarray([True, True], dtype=bool),
             "valid": True,
         },
     )
@@ -965,7 +962,7 @@ def test_adapter_truncates_later_slots_after_invalid_middle_prior(monkeypatch):
         module,
         "build_interaction_features",
         lambda *args, **kwargs: {
-            "type_mask": np.zeros((2, 2, 7), dtype=bool),
+            "type_mask": np.zeros((2, 2, 5), dtype=bool),
             "valid": False,
             "aux": [],
         },
@@ -1010,7 +1007,7 @@ def test_adapter_truncates_later_slots_after_invalid_middle_prior(monkeypatch):
         np.random.default_rng(1),
     )
 
-    assert states[module.OptionalSlot.CONTACT].active is True
+    assert states[module.OptionalSlot.INTERFACE_RESIDUE].active is True
     assert states[module.OptionalSlot.INTERACTION].valid is False
     assert states[module.OptionalSlot.INTERACTION].selected is False
     assert states[module.OptionalSlot.SURFACE].active is False
@@ -1028,12 +1025,12 @@ def test_slot_state_features_encode_source_and_unavailable_provenance():
 
     features = module._slot_state_features(
         {
-            OptionalSlot.CONTACT: SlotState(True, True, True, "source"),
+            OptionalSlot.INTERFACE_RESIDUE: SlotState(True, True, True, "source"),
             OptionalSlot.INTERACTION: SlotState(False, False, False, "unavailable"),
         }
     )
 
-    assert features["physppi_contact_provenance"].item() is True
+    assert features["physppi_interface_residue_provenance"].item() is True
     assert features["physppi_interaction_provenance"].item() is False
 
 

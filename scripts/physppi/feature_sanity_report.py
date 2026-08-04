@@ -138,8 +138,8 @@ def build_feature_snapshot(
             seed, epoch, global_slot, dataset, sample.sample_id
         )
         selection = sample_prior_level(available, occurrence_rng.slots)
-        # Match production: consume the occurrence contact draw before filtering.
-        cutoff = float(occurrence_rng.contact.uniform(8.0, 18.0))
+        # Match production: consume the occurrence interface draw before filtering.
+        cutoff = float(occurrence_rng.interface_residue.uniform(8.0, 18.0))
         occurrences.append(
             {
                 "sample_id": sample.sample_id,
@@ -148,8 +148,10 @@ def build_feature_snapshot(
                 "requested_prior_level": selection.requested_level,
                 "effective_prior_level": selection.effective_level,
                 "optional_slots": _slot_states(selection),
-                "contact_cutoff": (
-                    cutoff if selection.states[OptionalSlot.CONTACT].active else None
+                "interface_cutoff": (
+                    cutoff
+                    if selection.states[OptionalSlot.INTERFACE_RESIDUE].active
+                    else None
                 ),
             }
         )

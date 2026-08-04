@@ -332,15 +332,15 @@ def test_worker_benchmark_pad_stacks_matching_first_dim_with_different_tail_dim(
 
     stacked = worker._pad_and_stack_tensors_for_benchmark(
         [
+            torch.ones((4, 4, 4), dtype=torch.bool),
             torch.ones((4, 4, 5), dtype=torch.bool),
-            torch.ones((4, 4, 7), dtype=torch.bool),
         ]
     )
 
-    assert stacked.shape == (2, 4, 4, 7)
+    assert stacked.shape == (2, 4, 4, 5)
     assert stacked.dtype == torch.bool
-    assert stacked[0, :, :, :5].all()
-    assert not stacked[0, :, :, 5:].any()
+    assert stacked[0, :, :, :4].all()
+    assert not stacked[0, :, :, 4:].any()
     assert stacked[1].all()
 
 
@@ -359,7 +359,7 @@ def test_worker_benchmark_collator_crops_inactive_interaction_placeholders():
             {
                 "token_mask": torch.ones(4),
                 "physppi_interaction_active": torch.tensor(False),
-                "physppi_interaction_type_mask": torch.ones((4, 4, 7), dtype=torch.bool),
+                "physppi_interaction_type_mask": torch.ones((4, 4, 5), dtype=torch.bool),
             },
         ]
     )

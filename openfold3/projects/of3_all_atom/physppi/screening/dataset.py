@@ -87,7 +87,7 @@ def _tag_finding(finding: Finding, view: DeterministicAuditView) -> Finding:
                 "view_index": view.view_index,
                 "crop_strategy": view.crop_strategy,
                 "requested_level": view.requested_level,
-                "contact_cutoff": view.contact_cutoff,
+                "interface_cutoff": view.interface_cutoff,
                 "multichain_probe": view.multichain_probe,
             }
         }
@@ -106,7 +106,7 @@ def _protocol_finding(
             "view_index": view.view_index,
             "crop_strategy": view.crop_strategy,
             "requested_level": view.requested_level,
-            "contact_cutoff": view.contact_cutoff,
+            "interface_cutoff": view.interface_cutoff,
             "multichain_probe": view.multichain_probe,
         },
     )

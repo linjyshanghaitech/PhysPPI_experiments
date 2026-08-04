@@ -49,7 +49,7 @@ def _sample_record_values(**overrides: object) -> dict[str, object]:
             models.AuditView(
                 crop_strategy="spatial",
                 requested_level=0,
-                contact_cutoff=8.0,
+                interface_cutoff=8.0,
                 view_index=0,
             )
         ],
@@ -112,7 +112,7 @@ def test_audit_view_is_strict_bounded_and_immutable() -> None:
     view = models.AuditView(
         crop_strategy="spatial_interface",
         requested_level=4,
-        contact_cutoff=13.0,
+        interface_cutoff=13.0,
         view_index=6,
         multichain_probe=True,
     )
@@ -123,14 +123,14 @@ def test_audit_view_is_strict_bounded_and_immutable() -> None:
         models.AuditView(
             crop_strategy="spatial",
             requested_level=0,
-            contact_cutoff=18.1,
+            interface_cutoff=18.1,
             view_index=0,
         )
     with pytest.raises(ValidationError, match="Input should be 0, 1, 2, 3 or 4"):
         models.AuditView(
             crop_strategy="spatial",
             requested_level="4",
-            contact_cutoff=13.0,
+            interface_cutoff=13.0,
             view_index=0,
         )
     with pytest.raises(ValidationError, match="Instance is frozen"):
@@ -141,7 +141,7 @@ def test_sample_record_tracks_audit_views() -> None:
     audit_view = models.AuditView(
         crop_strategy="spatial",
         requested_level=0,
-        contact_cutoff=8.0,
+        interface_cutoff=8.0,
         view_index=0,
     )
     record = SampleRecord.classify(
@@ -480,7 +480,7 @@ def test_audit_view_rejects_nonfinite_numeric_fields(value: float) -> None:
         models.AuditView(
             crop_strategy="spatial",
             requested_level=0,
-            contact_cutoff=value,
+            interface_cutoff=value,
             view_index=0,
         )
 

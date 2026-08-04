@@ -2,9 +2,9 @@
 
 PhysPPI 是构建在 [OpenFold3](https://github.com/aqlaboratory/openfold-3)
 之上的蛋白质相互作用结构建模扩展。项目在保留 OpenFold3 mandatory
-输入和 diffusion 主干的基础上，引入 contact、typed interaction、
+输入和 diffusion 主干的基础上，引入 interface residue、typed interaction、
 surface mesh、TM topology、directed membrane geometry 和 pDockQ
-assessment，并通过 always-on LoRA 训练批准的主干目标。
+assessment，并只训练 PhysPPI prior 相关模块。
 
 本仓库在 `h20_jinyu` 上的 canonical checkout 是：
 
@@ -16,11 +16,11 @@ assessment，并通过 always-on LoRA 训练批准的主干目标。
 
 PhysPPI 的核心扩展包括：
 
-- binary cross-chain contact pair conditioning；
-- seven-channel typed interaction conditioning；
+- per-residue interface-residue conditioning（dmap 随机 cutoff 8~18Å）；
+- five-channel typed interaction conditioning；
 - token-to-mesh surface cross-attention；
 - TM topology 和 directed membrane plane；
-- frozen OpenFold3 backbone 和 always-on LoRA；
+- frozen OpenFold3 backbone（LoRA 默认禁用）；
 - Q-BioLiP/AFDB weighted sampling；
 - production DataLoader screening、exact-ID quarantine 和可恢复训练。
 
@@ -137,33 +137,33 @@ flowchart TB
     M["Mandatory features"] --> E["OpenFold3 input embedding"]
     E --> S["s_init: N x 384"]
     E --> Z["z_init: N x N x 128"]
-    C["Binary cross-chain contact"] --> CE["ContactPairEncoder"]
-    CE --> DZ1["zero-gated delta_z"]
-    I["7-channel typed interaction"] --> IE["InteractionPairEncoder"]
+    IR["Interface residue mask (dmap cutoff 8-18A)"] --> IE2["InterfaceResidueEncoder"]
+    IE2 --> DS1["zero-gated delta_s"]
+    I["5-channel typed interaction"] --> IE["InteractionPairEncoder"]
     IE --> DZ2["zero-gated delta_z"]
     IE --> IDH["InteractionDistanceHead auxiliary"]
     SF["Local surface mesh"] --> SPE["Shared positional encoding"]
     S --> SQ["Token s_init is the sole query"]
     SPE --> SE["SurfaceTokenEncoder: one 8-head cross-attention"]
     SQ --> SE
-    SE --> DS1["zero-gated delta_s"]
+    SE --> DS1B["zero-gated delta_s"]
     TM["TM topology"] --> TE["TMTopologyEncoder"]
     TE --> DS2["zero-gated delta_s"]
     TE --> MP["DirectedMembranePlaneEstimator"]
     S --> SA["s_init + delta_s"]
     DS1 --> SA
+    DS1B --> SA
     DS2 --> SA
     Z --> ZA["z_init + delta_z"]
-    DZ1 --> ZA
     DZ2 --> ZA
-    SA --> OF["Frozen OpenFold3 backbone + always-on LoRA"]
+    SA --> OF["Frozen OpenFold3 backbone"]
     ZA --> OF
     MP --> OF
     OF --> O["Diffusion, pLDDT/PDE/PAE, pDockQ"]
 ```
 
-contact 和 interaction 只生成 pair residual `delta_z`；
-surface 和 TM 只生成 single residual `delta_s`。所有 PhysPPI residual gate 精确零初始化，optional
+interaction 只生成 pair residual `delta_z`；
+interface residue、surface 和 TM 只生成 single residual `delta_s`。所有 PhysPPI residual gate 精确零初始化，optional
 slot 缺失、inactive 或 invalid 时返回精确零，并且只在 input embedding 阶段注入一次。
 continuous dmap 不进入网络；pEnergy 和 Delta-G 不属于该训练路线。
 pDockQ 是唯一 PhysPPI-specific assessment；directed membrane normal 和反向 normal 不等价。
@@ -189,7 +189,7 @@ optional level 固定为：
 | Level | Active prefix | Probability |
 |---|---|---:|
 | L0 | mandatory | 0.20 |
-| L1 | mandatory + contact | 0.20 |
+| L1 | mandatory + interface residue | 0.20 |
 | L2 | L1 + interaction | 0.20 |
 | L3 | L2 + surface | 0.20 |
 | L4 | L3 + TM | 0.20 |
@@ -201,13 +201,13 @@ failure，不能伪装为 missing。
 
 complex GT coordinates、interaction endpoint distance 和 directed membrane
 plane 是 labels。数据处理可从 GT dmap 采样
-`tau ~ Uniform(8,18 Angstrom)` 并生成 binary cross-chain contact graph，
+`tau ~ Uniform(8,18 Angstrom)` 并生成 per-residue interface-residue mask，
 但 continuous dmap 和采样阈值都不会成为模型输入。
 
 ### Surface mesh
 
 训练集提供 mesh；mandatory-only inference 不依赖 mesh。每个 token 最多
-选择 128 个同链 mesh 点，局部 frame 来自 owning residue 的 `N-CA-C`。
+选择 64 个同链 mesh 点，局部 frame 来自 owning residue 的 `N-CA-C`。
 local coordinates 与 normals 使用同一 frame，六个属性顺序为
 `[charge, hphob, nx, ny, nz, si]`。该 token 的 `s_init` 是唯一 query，
 query 和 mesh key/value 共用 stateless positional basis。
@@ -428,17 +428,17 @@ replicas 降为 1。
 | templates / take_top_k | 4 / false |
 | token budget | 768 |
 | contiguous / spatial / interface crop | 0.0 / 0.5 / 0.5 |
-| surface neighbors | 128 |
-| contact cutoff | Uniform(8,18 Angstrom) |
-| interaction channels | 7 |
+| surface neighbors | 64 |
+| interface cutoff | Uniform(8,18 Angstrom) |
+| interaction channels | 5 |
 | single / pair width | 384 / 128 |
 | surface attention | 1 layer, 8 heads x 48, dropout 0 |
 | membrane normal bins / depth cutoff | 16 / 30 Angstrom |
 
 ### Freeze 与 LoRA
 
-Base OpenFold3 parameters 保持冻结。PhysPPI adapters、auxiliary heads、
-assessment modules 和 always-on LoRA 可训练。
+Base OpenFold3 parameters 保持冻结。PhysPPI conditioning、auxiliary heads
+和 assessment modules 可训练；LoRA 默认禁用（工具代码保留，`enabled=False`）。
 
 | Target | Rank | Alpha | Dropout |
 |---|---:|---:|---:|
@@ -446,7 +446,7 @@ assessment modules 和 always-on LoRA 可训练。
 | Pairformer blocks 40-47 approved targets | 4 | 8 | 0.05 |
 
 LoRA 使用 `target_preset=physppi_always_on`、`init_method=b_zero` 和
-`train_bias=false`。
+`train_bias=false`；带 LoRA 参数的 checkpoint 在禁用状态下会被严格拒绝。
 
 ### Loss、optimizer 与 scheduler
 
@@ -500,10 +500,10 @@ matcher/crop 和 `PhysPPIDataError`。
 残留进程才允许 KILL。不得停止无关 GPU 进程。
 
 sample-specific failure 必须先记录 dataset、exact ID、rank、epoch、
-micro-step、optimizer update、optional level、contact cutoff、view、
+micro-step、optimizer update、optional level、interface cutoff、view、
 matcher 和 traceback，再创建新版本 ledger、manifest、YAML 和 output。
 
-- cold start 从 canonical OpenFold3 EMA weights 初始化 fresh PhysPPI/LoRA；
+- cold start 从 canonical OpenFold3 EMA weights 初始化 fresh PhysPPI modules；
 - same-manifest resume 恢复 model、optimizer、scheduler、EMA、RNG 和 sampler；
 - manifest-changing quarantine 恢复训练状态，但按新 manifest 确定性重建
   DataModule/sampler；

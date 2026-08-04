@@ -33,29 +33,31 @@ import torch
 
 
 # ---------------------------------------------------------------------------
-# Interface residues (dmap → pair_mask [N, N])
+# Interface residues (dmap → interface_mask [N])
 # ---------------------------------------------------------------------------
 
 
-def build_contact_from_precomputed(
+def build_interface_residue_from_precomputed(
     pt_path: Path,
     token_index: Mapping[tuple[str, int], int],
     cutoff: float,
 ) -> dict[str, Any]:
-    """Build [N, N] contact pair mask from _interface_residues.pt.
+    """Build [N] interface-residue mask from _interface_residues.pt.
 
-    Drop-in for build_contact_features(sample.dmap, token_index, cutoff).
+    Drop-in for build_interface_residue_features(sample.dmap, token_index,
+    cutoff).
     Distance-based cutoff augmentation is applied here — dmap stores raw
-    CA-CA distances; only pairs with dist ≤ cutoff become active contacts.
+    CA-CA distances; residues with at least one cross-chain pair ≤ cutoff are
+    marked as interface residues.
     """
     n_tokens = _num_tokens(token_index)
-    pair_mask = np.zeros((n_tokens, n_tokens), dtype=bool)
+    interface_mask = np.zeros((n_tokens,), dtype=bool)
 
     try:
         pt = torch.load(pt_path, map_location="cpu", weights_only=False)
     except Exception:
         return {
-            "pair_mask": pair_mask,
+            "interface_mask": interface_mask,
             "available": False,
             "valid": False,
             "cutoff": cutoff,
@@ -64,7 +66,7 @@ def build_contact_from_precomputed(
     dmap = pt.get("dmap", {})
     if not isinstance(dmap, dict):
         return {
-            "pair_mask": pair_mask,
+            "interface_mask": interface_mask,
             "available": False,
             "valid": False,
             "cutoff": cutoff,
@@ -86,13 +88,13 @@ def build_contact_from_precomputed(
             ta, tb = int(ta), int(tb)
             if ta >= n_tokens or tb >= n_tokens or ta == tb:
                 continue
-            pair_mask[ta, tb] = True
-            pair_mask[tb, ta] = True
+            interface_mask[ta] = True
+            interface_mask[tb] = True
 
     return {
-        "pair_mask": pair_mask,
+        "interface_mask": interface_mask,
         "available": True,
-        "valid": bool(pair_mask.any()),
+        "valid": bool(interface_mask.any()),
         "cutoff": cutoff,
     }
 

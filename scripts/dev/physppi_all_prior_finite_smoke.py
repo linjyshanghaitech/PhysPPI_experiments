@@ -63,8 +63,8 @@ from openfold3.projects.of3_all_atom.physppi.data.readers.qbiolip10k import (
     QBioLiP10kReader,
 )
 from openfold3.projects.of3_all_atom.physppi.features import (
-    build_contact_features,
     build_interaction_features,
+    build_interface_residue_features,
     build_membrane_target,
     build_surface_features,
     build_tm_features,
@@ -436,7 +436,7 @@ def _build_prior_only_batch(
     if n_tokens == 0:
         raise ValueError("no residue tokens after canonical PDB parsing")
     rng = np.random.default_rng(_sample_seed(sample_id))
-    contact = build_contact_features(
+    interface = build_interface_residue_features(
         sample.dmap, token_index, cutoff=float(rng.uniform(8.0, 18.0))
     )
     interaction = build_interaction_features(
@@ -453,7 +453,6 @@ def _build_prior_only_batch(
         transforms,
         128,
         atom_array=atom_array,
-        surface_interface_mask=contact["surface_interface_mask"],
     )
     res_loc = sample.opm.get("res_loc", {}) if isinstance(sample.opm, dict) else {}
     tm_mask = build_tm_features(res_loc, token_index)
@@ -477,10 +476,10 @@ def _build_prior_only_batch(
     }
     batch = {
         "token_mask": torch.ones(1, n_tokens, dtype=torch.bool, device=device),
-        "physppi_contact_token_mask": torch.from_numpy(contact["mask"])[None].to(
-            device
-        ),
-        "physppi_contact_active": torch.tensor(
+        "physppi_interface_residue_mask": torch.from_numpy(
+            interface["interface_mask"]
+        )[None].to(device),
+        "physppi_interface_residue_active": torch.tensor(
             [states[PRIOR_OPTIONAL_SLOTS[0]].active], device=device
         ),
         "physppi_interaction_type_mask": torch.from_numpy(interaction["type_mask"])[

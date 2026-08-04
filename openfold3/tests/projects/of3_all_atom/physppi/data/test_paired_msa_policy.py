@@ -18,7 +18,7 @@ def test_paired_msa_never_enters_optional_sampling():
         {slot: True for slot in PRIOR_OPTIONAL_SLOTS}, np.random.default_rng(0)
     ).states
     assert "paired_msa" not in {slot.value for slot in states}
-    assert OptionalSlot.CONTACT in states
+    assert OptionalSlot.INTERFACE_RESIDUE in states
 
 
 def test_partial_paired_msa_availability_is_mask_only():

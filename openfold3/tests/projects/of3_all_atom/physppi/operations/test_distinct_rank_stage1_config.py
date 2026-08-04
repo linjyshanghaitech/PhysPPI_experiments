@@ -36,7 +36,7 @@ def _baseline() -> dict[str, object]:
     dataset_config = {
         "template": {"n_templates": 4, "take_top_k": False},
         "crop": {"token_crop": {"enabled": True, "token_budget": 768}},
-        "physppi": {"root": "/data/root", "num_surface_neighbors": 128},
+        "physppi": {"root": "/data/root", "num_surface_neighbors": 64},
         "loss": {
             "confidence_loss_names": ["plddt", "pde", "pae"],
             "loss_weights": {"experimentally_resolved": 0.0, "pde": 1.0e-4},
@@ -58,7 +58,7 @@ def _baseline() -> dict[str, object]:
         },
         "model_update": {
             "custom": {
-                "settings": {"training_scope": "physppi_lora_assessment"},
+                "settings": {"training_scope": "physppi_priors_only"},
                 "architecture": {
                     "physppi": {
                         "enabled": True,

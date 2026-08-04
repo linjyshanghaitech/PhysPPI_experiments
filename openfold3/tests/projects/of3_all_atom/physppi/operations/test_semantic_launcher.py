@@ -38,11 +38,11 @@ def test_trace_row_contains_parity_fields() -> None:
         "occurrence_seed",
         "requested_level",
         "effective_level",
-        "contact_cutoff",
+        "interface_cutoff",
         "optimizer_step",
     }
     assert row["dataset"] == "afdb"
-    assert 8.0 <= row["contact_cutoff"] <= 18.0
+    assert 8.0 <= row["interface_cutoff"] <= 18.0
 
 
 def _prefix_config(manifest: Path, epoch_len: int) -> dict:

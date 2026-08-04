@@ -13,7 +13,7 @@ from openfold3.projects.of3_all_atom.constants import TRAIN_LOSSES
 from openfold3.projects.of3_all_atom.model import OpenFold3
 from openfold3.projects.of3_all_atom.runner import OpenFold3AllAtom
 
-PHYSPPI_SCOPE = "physppi_lora_assessment"
+PHYSPPI_SCOPE = "physppi_priors_only"
 
 
 def test_pdockq_loss_is_registered_for_epoch_logging():

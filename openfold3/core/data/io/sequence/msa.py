@@ -374,8 +374,8 @@ def parse_msas_preparsed(
                         stacklevel=2,
                     )
                 msas[k] = MsaArray(
-                    msa=unpacked_msas["msa"],
-                    deletion_matrix=unpacked_msas["deletion_matrix"],
+                    msa=np.ascontiguousarray(unpacked_msas["msa"]),
+                    deletion_matrix=np.ascontiguousarray(unpacked_msas["deletion_matrix"]),
                     metadata=unpacked_msas["metadata"],
                 )
 

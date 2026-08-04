@@ -495,6 +495,26 @@ class TrainingExperimentRunner(ExperimentRunner):
 
         return DataModuleConfig(datasets=cfgs, **self.data_module_args.model_dump())
 
+    def run(self) -> Any:
+        """Run with native PL resume — uses weights_only=False for checkpoint IO.
+
+        PL's TorchCheckpointIO defaults to weights_only=True in newer PyTorch
+        versions, but PhysPPI recovery checkpoints contain ConfigDict and other
+        non-tensor objects that require weights_only=False.
+        """
+        if not self.do_manual_ckpt_loading and self.restart_checkpoint_path:
+            from lightning_fabric.plugins.io.torch_io import TorchCheckpointIO
+
+            class _WeightsAgnosticCheckpointIO(TorchCheckpointIO):
+                def load_checkpoint(self, path, map_location=None, **kwargs):
+                    return torch.load(
+                        path, map_location=map_location, weights_only=False
+                    )
+
+            self.trainer.strategy.checkpoint_io = _WeightsAgnosticCheckpointIO()
+
+        return super().run()
+
     @property
     def resume_existing_run(self):
         # Preemption-safe resume option is currently only valid if wandb is enabled.
@@ -658,7 +678,7 @@ class TrainingExperimentRunner(ExperimentRunner):
     @cached_property
     def loggers(self):
         """Retrieve the list of loggers to be used in the experiment."""
-        _loggers = [CSVLogger(save_dir=self.output_dir, name="metrics")]
+        _loggers = [CSVLogger(save_dir=self.output_dir, name="metrics", version=self.logging_config.csv_logger_version)]
         if self.use_wandb:
             _loggers.append(self.wandb.logger)
         return _loggers

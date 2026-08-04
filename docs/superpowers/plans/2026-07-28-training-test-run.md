@@ -170,7 +170,7 @@ model_update:
     - train
   custom:
     settings:
-      training_scope: physppi_lora_assessment
+      training_scope: physppi_priors_only
       train_confidence_only: false
     architecture:
       physppi:

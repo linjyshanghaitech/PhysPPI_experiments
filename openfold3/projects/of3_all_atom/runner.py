@@ -49,7 +49,6 @@ from openfold3.core.metrics.quality import (
     get_metrics_chunked,
 )
 from openfold3.core.model.lora import (
-    is_lora_parameter_name,
     validate_lora_checkpoint_keys,
 )
 from openfold3.core.runners.model_runner import ModelRunner
@@ -116,8 +115,10 @@ def sampler_trace_row(
     occurrence_seed = _trace_scalar(
         batch["physppi_occurrence_seed"], "physppi_occurrence_seed"
     )
-    contact_child = np.random.SeedSequence(occurrence_seed).spawn(6)[1]
-    contact_cutoff = float(np.random.default_rng(contact_child).uniform(8.0, 18.0))
+    interface_child = np.random.SeedSequence(occurrence_seed).spawn(6)[1]
+    interface_cutoff = float(
+        np.random.default_rng(interface_child).uniform(8.0, 18.0)
+    )
     row: dict[str, int | float | str] = {
         "rank": int(rank),
         "epoch": int(epoch),
@@ -133,7 +134,7 @@ def sampler_trace_row(
             batch["physppi_prior_effective_level"],
             "physppi_prior_effective_level",
         ),
-        "contact_cutoff": contact_cutoff,
+        "interface_cutoff": interface_cutoff,
     }
     if optimizer_step is not None:
         row["optimizer_step"] = int(optimizer_step)
@@ -427,13 +428,13 @@ class OpenFold3AllAtom(ModelRunner):
             ]
             self._freeze_model_params(exempt_submodule=exempt_submodule)
 
-        if stage == "fit" and training_scope == "physppi_lora_assessment":
+        if stage == "fit" and training_scope == "physppi_priors_only":
             if self.config.settings.train_confidence_only:
                 raise ValueError(
                     "settings.training_scope and train_confidence_only "
                     "cannot both be true"
                 )
-            self._freeze_model_params_for_physppi_and_lora()
+            self._freeze_model_params_for_physppi_priors()
 
         # Initialize the gradient manager if doing per-sample grad clipping
         if self.per_sample_grad_clipping:
@@ -444,12 +445,26 @@ class OpenFold3AllAtom(ModelRunner):
 
     def _get_physppi_only_exempt_submodules(self) -> list[torch.nn.Module]:
         """Return the explicit PhysPPI/assessment trainable whitelist."""
+        physppi_config = getattr(self.config.architecture, "physppi", None)
+        prior_conditioner_config = (
+            getattr(physppi_config, "optional_prior_conditioner", None)
+            if physppi_config is not None
+            else None
+        )
+        prior_conditioner_enabled = bool(
+            prior_conditioner_config is None
+            or prior_conditioner_config.get("enabled", True)
+        )
         physppi_conditioning = getattr(self.model, "physppi_conditioning", None)
-        if physppi_conditioning is None:
+        if physppi_conditioning is None and prior_conditioner_enabled:
             raise ValueError(
-                "settings.training_scope requires architecture.physppi.enabled=True"
+                "settings.training_scope requires architecture.physppi.enabled=True "
+                "with optional_prior_conditioner.enabled=True, but the model has no "
+                "physppi_conditioning module"
             )
-        modules = [physppi_conditioning]
+        modules = []
+        if physppi_conditioning is not None:
+            modules.append(physppi_conditioning)
         for name in ("membrane_plane_estimator", "interaction_distance_head"):
             module = getattr(self.model, name, None)
             if module is not None:
@@ -475,15 +490,8 @@ class OpenFold3AllAtom(ModelRunner):
             for param in layer.parameters():
                 param.requires_grad = True
 
-    def _freeze_model_params_for_physppi_and_lora(self):
-        """Freeze OF3, then unfreeze PhysPPI/assessment modules and LoRA A/B."""
-        if getattr(self.config.architecture, "lora", None) is None:
-            raise ValueError("physppi_lora_assessment requires architecture.lora")
-        if not self.config.architecture.lora.enabled:
-            raise ValueError(
-                "physppi_lora_assessment requires architecture.lora.enabled"
-            )
-
+    def _freeze_model_params_for_physppi_priors(self):
+        """Freeze OF3, then unfreeze PhysPPI/assessment modules."""
         for param in self.model.parameters():
             param.requires_grad = False
 
@@ -491,23 +499,11 @@ class OpenFold3AllAtom(ModelRunner):
             for param in module.parameters():
                 param.requires_grad = True
 
-        lora_param_count = 0
-        for name, param in self.model.named_parameters():
-            if is_lora_parameter_name(name):
-                param.requires_grad = True
-                lora_param_count += param.numel()
-
-        if lora_param_count == 0:
-            raise ValueError("physppi_lora_assessment found zero LoRA parameters")
-
         unexpected = [
             name
             for name, parameter in self.model.named_parameters()
             if parameter.requires_grad
-            and not (
-                name.startswith(PHYSPPI_TRAINABLE_PREFIXES)
-                or is_lora_parameter_name(name)
-            )
+            and not name.startswith(PHYSPPI_TRAINABLE_PREFIXES)
         ]
         if unexpected:
             raise ValueError(
@@ -526,7 +522,7 @@ class OpenFold3AllAtom(ModelRunner):
     ) -> None:
         if (
             self.config.settings.get("training_scope", "baseline")
-            != "physppi_lora_assessment"
+            != "physppi_priors_only"
         ):
             return
         if self.log_dir is None or self.trainer is None:
@@ -1714,7 +1710,7 @@ class OpenFold3AllAtom(ModelRunner):
         """
         if (
             self.config.settings.get("training_scope", "baseline")
-            != "physppi_lora_assessment"
+            != "physppi_priors_only"
         ):
             return
 

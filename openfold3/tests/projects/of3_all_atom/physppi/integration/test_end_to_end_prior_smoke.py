@@ -56,21 +56,13 @@ def _canonical_like_batch(*, membrane: bool):
     )
     batch.update(
         {
-            "physppi_contact_available": torch.tensor([True]),
-            "physppi_contact_selected": torch.tensor([True]),
-            "physppi_contact_valid": torch.tensor([True]),
-            "physppi_contact_provenance": torch.tensor([True]),
-            "physppi_contact_active": torch.tensor([True]),
-            "physppi_contact_pair_mask": torch.tensor(
-                [
-                    [
-                        [False, False, True, False],
-                        [False, False, False, True],
-                        [True, False, False, False],
-                        [False, True, False, False],
-                    ]
-                ],
-                dtype=torch.bool,
+            "physppi_interface_residue_available": torch.tensor([True]),
+            "physppi_interface_residue_selected": torch.tensor([True]),
+            "physppi_interface_residue_valid": torch.tensor([True]),
+            "physppi_interface_residue_provenance": torch.tensor([True]),
+            "physppi_interface_residue_active": torch.tensor([True]),
+            "physppi_interface_residue_mask": torch.tensor(
+                [[True, True, True, False]], dtype=torch.bool
             ),
             "physppi_interaction_available": torch.tensor([True]),
             "physppi_interaction_selected": torch.tensor([True]),
@@ -78,18 +70,18 @@ def _canonical_like_batch(*, membrane: bool):
             "physppi_interaction_provenance": torch.tensor([True]),
             "physppi_interaction_active": torch.tensor([True]),
             "physppi_interaction_type_mask": torch.zeros(
-                1, n_token, n_token, 7, dtype=torch.bool
+                1, n_token, n_token, 5, dtype=torch.bool
             ),
             "physppi_surface_available": torch.tensor([True]),
             "physppi_surface_selected": torch.tensor([True]),
             "physppi_surface_valid": torch.tensor([True]),
             "physppi_surface_provenance": torch.tensor([True]),
             "physppi_surface_active": torch.tensor([True]),
-            "physppi_surface_local_coords": torch.zeros(1, n_token, 128, 3),
-            "physppi_surface_features": torch.zeros(1, n_token, 128, 6),
-            "physppi_surface_mask": torch.ones(1, n_token, 128, dtype=torch.bool),
+            "physppi_surface_local_coords": torch.zeros(1, n_token, 64, 3),
+            "physppi_surface_features": torch.zeros(1, n_token, 64, 6),
+            "physppi_surface_mask": torch.ones(1, n_token, 64, dtype=torch.bool),
             "physppi_surface_charge_mask": torch.ones(
-                1, n_token, 128, dtype=torch.bool
+                1, n_token, 64, dtype=torch.bool
             ),
             "physppi_tm_available": torch.tensor([membrane]),
             "physppi_tm_selected": torch.tensor([membrane]),
@@ -178,6 +170,7 @@ def test_canonical_prior_route_emits_confidence_and_finite_loss(monkeypatch):
         assert "plddt_logits" in output
         assert "pae_logits" in output
         assert "physppi_contact_mask" not in processed
+        assert "physppi_interface_residue_mask" in processed
         assert "physppi_membrane_normal" not in output
         assert "physppi_membrane_offset" not in output
         assert "physppi_membrane_plane_valid" not in output

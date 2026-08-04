@@ -110,6 +110,7 @@ class LoggingConfig(BaseModel):
     log_lr: bool = True
     log_grads: bool = False
     log_level: Literal["debug", "info", "warning", "error"] | None = None
+    csv_logger_version: int | None = None
     wandb_config: WandbConfig | None = None
 
 

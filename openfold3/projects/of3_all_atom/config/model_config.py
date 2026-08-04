@@ -20,7 +20,7 @@ from openfold3.projects.of3_all_atom.config import (
     linear_init_config as lin_init,
 )
 
-PHYSPPI_TRAINING_SCOPE = "physppi_lora_assessment"
+PHYSPPI_TRAINING_SCOPE = "physppi_priors_only"
 PHYSPPI_TRAINABLE_PREFIXES = (
     "physppi_conditioning.",
     "membrane_plane_estimator.",
@@ -100,46 +100,6 @@ def validate_physppi_semantic_config(config) -> None:
             f"settings.training_scope={PHYSPPI_TRAINING_SCOPE!r} requires "
             "architecture.physppi.enabled=True"
         )
-
-    lora = getattr(config.architecture, "lora", None)
-    if lora is None or not lora.enabled:
-        raise ValueError(
-            f"settings.training_scope={PHYSPPI_TRAINING_SCOPE!r} requires "
-            "architecture.lora.enabled=True"
-        )
-    required_metadata = {
-        "target_preset": "physppi_always_on",
-        "init": "b_zero",
-        "train_bias": False,
-    }
-    for field, expected in required_metadata.items():
-        actual = lora.get(field)
-        if actual != expected:
-            raise ValueError(
-                f"architecture.lora.{field} must be {expected!r}, got {actual!r}"
-            )
-
-    groups = list(lora.get("groups", ()))
-    if len(groups) != len(PHYSPPI_LORA_GROUP_SPECS):
-        raise ValueError("PhysPPI requires exactly two LoRA groups")
-    for index, (group, expected) in enumerate(
-        zip(groups, PHYSPPI_LORA_GROUP_SPECS, strict=True)
-    ):
-        unexpected_fields = sorted(set(group) - set(expected))
-        if unexpected_fields:
-            raise ValueError(
-                f"architecture.lora.groups[{index}] has unsupported field(s): "
-                + ", ".join(unexpected_fields)
-            )
-        for field, expected_value in expected.items():
-            actual_value = group.get(field)
-            if field == "patterns":
-                actual_value = tuple(actual_value or ())
-            if actual_value != expected_value:
-                raise ValueError(
-                    f"architecture.lora.groups[{index}].{field} must be "
-                    f"{expected_value!r}, got {actual_value!r}"
-                )
 
     forbidden_paths = []
     for section_name in ("heads", "loss_module"):
@@ -460,10 +420,10 @@ model_config = mlc.ConfigDict(
             },
             "physppi": {
                 "enabled": False,
-                "training_scope": "physppi_lora_assessment",
+                "training_scope": "physppi_priors_only",
                 "optional_prior_conditioner": {
                     "enabled": True,
-                    "num_interaction_types": 7,
+                    "num_interaction_types": 5,
                 },
                 "membrane_geometry": {
                     "enabled": True,
@@ -472,7 +432,7 @@ model_config = mlc.ConfigDict(
                 },
             },
             "lora": {
-                "enabled": True,
+                "enabled": False,
                 "target_preset": "physppi_always_on",
                 "target_patterns": [],
                 "groups": [

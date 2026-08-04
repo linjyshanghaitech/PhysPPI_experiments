@@ -76,7 +76,7 @@ def test_readme_contains_exactly_two_physppi_mermaid_diagrams() -> None:
     assert text.count("```mermaid") == 2
     assert text.count("```") % 2 == 0
     required_symbols = (
-        "ContactPairEncoder",
+        "InterfaceResidueEncoder",
         "InteractionPairEncoder",
         "InteractionDistanceHead",
         "SurfaceTokenEncoder",
@@ -95,7 +95,7 @@ def test_readme_states_the_label_and_residual_boundaries() -> None:
     text = read_readme()
     required = (
         "continuous dmap 不进入网络",
-        "contact 和 interaction 只生成 pair residual",
+        "interface residue、surface 和 TM 只生成 single residual",
         "surface 和 TM 只生成 single residual",
         "精确零初始化",
         "只在 input embedding 阶段注入一次",

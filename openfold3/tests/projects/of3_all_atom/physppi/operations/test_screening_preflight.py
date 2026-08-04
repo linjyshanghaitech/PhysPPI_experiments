@@ -122,26 +122,26 @@ def _valid_features() -> dict:
         "physppi_token_center_atom_index": torch.tensor([1, 3]),
         "physppi_backbone_atom_indices": torch.tensor([[0, 1, 0], [2, 3, 2]]),
         "physppi_backbone_frame_mask": torch.ones(n_tokens, dtype=torch.bool),
-        "physppi_contact_pair_mask": torch.zeros(
-            (n_tokens, n_tokens), dtype=torch.bool
+        "physppi_interface_residue_mask": torch.zeros(
+            (n_tokens,), dtype=torch.bool
         ),
         "physppi_interaction_type_mask": torch.zeros(
-            (n_tokens, n_tokens, 7), dtype=torch.bool
+            (n_tokens, n_tokens, 5), dtype=torch.bool
         ),
         "physppi_interaction_distance": torch.zeros((n_tokens, n_tokens)),
         "physppi_interaction_aux_valid": torch.zeros(
             (n_tokens, n_tokens), dtype=torch.bool
         ),
-        "physppi_surface_local_coords": torch.zeros((n_tokens, 128, 3)),
-        "physppi_surface_features": torch.zeros((n_tokens, 128, 6)),
-        "physppi_surface_mask": torch.zeros((n_tokens, 128), dtype=torch.bool),
-        "physppi_surface_charge_mask": torch.zeros((n_tokens, 128), dtype=torch.bool),
+        "physppi_surface_local_coords": torch.zeros((n_tokens, 64, 3)),
+        "physppi_surface_features": torch.zeros((n_tokens, 64, 6)),
+        "physppi_surface_mask": torch.zeros((n_tokens, 64), dtype=torch.bool),
+        "physppi_surface_charge_mask": torch.zeros((n_tokens, 64), dtype=torch.bool),
         "physppi_prior_requested_level": torch.tensor(4),
         "physppi_prior_effective_level": torch.tensor(4),
         "physppi_occurrence_seed": torch.tensor(7, dtype=torch.uint64),
         **{
             f"physppi_{slot}_{state}": torch.tensor(value)
-            for slot in ("contact", "interaction", "surface", "tm")
+            for slot in ("interface_residue", "interaction", "surface", "tm")
             for state, value in (
                 ("available", True),
                 ("selected", True),
@@ -254,21 +254,21 @@ def test_paired_msa_ignores_masked_asym_id_padding() -> None:
                 [[0, 1, 0], [2, 3, 2], [-1, -1, -1], [-1, -1, -1]]
             ),
             "physppi_backbone_frame_mask": torch.tensor([True, True, False, False]),
-            "physppi_contact_pair_mask": torch.zeros(
-                (n_tokens, n_tokens), dtype=torch.bool
+            "physppi_interface_residue_mask": torch.zeros(
+                (n_tokens,), dtype=torch.bool
             ),
             "physppi_interaction_type_mask": torch.zeros(
-                (n_tokens, n_tokens, 7), dtype=torch.bool
+                (n_tokens, n_tokens, 5), dtype=torch.bool
             ),
             "physppi_interaction_distance": torch.zeros((n_tokens, n_tokens)),
             "physppi_interaction_aux_valid": torch.zeros(
                 (n_tokens, n_tokens), dtype=torch.bool
             ),
-            "physppi_surface_local_coords": torch.zeros((n_tokens, 128, 3)),
-            "physppi_surface_features": torch.zeros((n_tokens, 128, 6)),
-            "physppi_surface_mask": torch.zeros((n_tokens, 128), dtype=torch.bool),
+            "physppi_surface_local_coords": torch.zeros((n_tokens, 64, 3)),
+            "physppi_surface_features": torch.zeros((n_tokens, 64, 6)),
+            "physppi_surface_mask": torch.zeros((n_tokens, 64), dtype=torch.bool),
             "physppi_surface_charge_mask": torch.zeros(
-                (n_tokens, 128), dtype=torch.bool
+                (n_tokens, 64), dtype=torch.bool
             ),
         }
     )
@@ -282,7 +282,7 @@ def test_valid_feature_contract_has_no_findings() -> None:
 def test_legacy_contact_and_surface_interface_fields_are_rejected() -> None:
     features = _valid_features()
     features["physppi_contact_token_mask"] = torch.zeros(2, dtype=torch.bool)
-    features["physppi_surface_interface_mask"] = torch.zeros((2, 128), dtype=torch.bool)
+    features["physppi_surface_interface_mask"] = torch.zeros((2, 64), dtype=torch.bool)
 
     assert {finding.code for finding in validate_physppi_features(features)} == {
         "legacy_prior_field"
@@ -487,7 +487,7 @@ def test_preflight_config_is_private_manifest_free_and_forces_one_crop(
         if dataset_name is DatasetName.QBIOLIP
         else options.afdb_root
     )
-    assert dataset.physppi.num_surface_neighbors == 128
+    assert dataset.physppi.num_surface_neighbors == 64
     assert Path(dataset.physppi.index_cache_file) == source_index
     assert not (worker_cache_dir / "reader-index-cache.pkl").exists()
     assert Path(dataset._dataset_cache_file) == worker_cache_dir / "cache.json"
@@ -561,7 +561,7 @@ def test_miniature_reader_reaches_latest_features_and_collator(
     assert validate_physppi_features(features) == []
     assert batch["physppi_surface_local_coords"].shape[-3:] == (
         n_tokens,
-        128,
+        64,
         3,
     )
     assert batch["physppi_paired_msa_chain_mask"].ndim == 2
@@ -612,19 +612,21 @@ def test_audit_override_forces_level_and_cutoff_without_changing_rng_stream() ->
     available = {slot: True for slot in OptionalSlot}
     slot_rng = np.random.default_rng(17)
     slot_control = np.random.default_rng(17)
-    contact_rng = np.random.default_rng(23)
-    contact_control = np.random.default_rng(23)
+    interface_rng = np.random.default_rng(23)
+    interface_control = np.random.default_rng(23)
 
-    with adapter.audit_prior_view(requested_level=4, contact_cutoff=8.0):
+    with adapter.audit_prior_view(requested_level=4, interface_cutoff=8.0):
         selection = adapter._select_prior_level(available, slot_rng)
-        cutoff = adapter._select_contact_cutoff(contact_rng)
+        cutoff = adapter._select_interface_cutoff(interface_rng)
 
     slot_control.integers(0, 5)
-    contact_control.uniform(8.0, 18.0)
+    interface_control.uniform(8.0, 18.0)
     assert selection.requested_level == 4
     assert cutoff == 8.0
     assert slot_rng.integers(0, 5) == slot_control.integers(0, 5)
-    assert contact_rng.uniform(8.0, 18.0) == contact_control.uniform(8.0, 18.0)
+    assert interface_rng.uniform(8.0, 18.0) == interface_control.uniform(
+        8.0, 18.0
+    )
     assert adapter._physppi_audit_view_override is None
 
 
@@ -634,7 +636,7 @@ def test_audit_override_is_restored_after_dataset_exception() -> None:
 
     with (
         pytest.raises(RuntimeError, match="dataset failed"),
-        adapter.audit_prior_view(requested_level=2, contact_cutoff=13.0),
+        adapter.audit_prior_view(requested_level=2, interface_cutoff=13.0),
     ):
         raise RuntimeError("dataset failed")
 
@@ -659,12 +661,12 @@ def test_preflight_audit_view_applies_and_clears_dataset_override(
             assert occurrence.datapoint_idx == 0
 
         @contextmanager
-        def audit_prior_view(self, *, requested_level: int, contact_cutoff: float):
-            events.append(("enter", requested_level, contact_cutoff))
+        def audit_prior_view(self, *, requested_level: int, interface_cutoff: float):
+            events.append(("enter", requested_level, interface_cutoff))
             try:
                 yield
             finally:
-                events.append(("exit", requested_level, contact_cutoff))
+                events.append(("exit", requested_level, interface_cutoff))
 
         def __getitem__(self, index: int) -> dict:
             assert index == 0
@@ -682,8 +684,8 @@ def test_preflight_audit_view_applies_and_clears_dataset_override(
 
     assert findings == []
     assert events == [
-        ("enter", view.requested_level, view.contact_cutoff),
-        ("exit", view.requested_level, view.contact_cutoff),
+        ("enter", view.requested_level, view.interface_cutoff),
+        ("exit", view.requested_level, view.interface_cutoff),
     ]
 
 

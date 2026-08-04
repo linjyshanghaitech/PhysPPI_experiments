@@ -32,7 +32,7 @@ def _requested_matrix(views: tuple[AuditView, ...]) -> tuple[tuple, ...]:
         (
             view.crop_strategy,
             view.requested_level,
-            view.contact_cutoff,
+            view.interface_cutoff,
             view.view_index,
             view.multichain_probe,
         )
@@ -55,7 +55,7 @@ def test_view_matrix_is_the_fixed_seven_view_contract() -> None:
         "spatial",
         "spatial_interface",
     }
-    assert {view.contact_cutoff for view in views} == {8.0, 13.0, 18.0}
+    assert {view.interface_cutoff for view in views} == {8.0, 13.0, 18.0}
     assert sum(view.multichain_probe for view in views) == 2
 
 

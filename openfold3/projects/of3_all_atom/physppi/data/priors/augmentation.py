@@ -20,14 +20,14 @@ import numpy as np
 class OptionalSlot(str, Enum):
     """Optional feature groups that may be independently sampled."""
 
-    CONTACT = "contact"
+    INTERFACE_RESIDUE = "interface_residue"
     INTERACTION = "interaction"
     SURFACE = "surface"
     TM = "tm"
 
 
 PRIOR_OPTIONAL_SLOTS = (
-    OptionalSlot.CONTACT,
+    OptionalSlot.INTERFACE_RESIDUE,
     OptionalSlot.INTERACTION,
     OptionalSlot.SURFACE,
     OptionalSlot.TM,
@@ -47,7 +47,7 @@ def available_optional_slots(sample: object) -> dict[OptionalSlot, bool]:
     """Return the canonical source-availability state for optional priors."""
     res_loc = sample.opm.get("res_loc") if isinstance(sample.opm, dict) else None
     available = {
-        OptionalSlot.CONTACT: bool(sample.dmap),
+        OptionalSlot.INTERFACE_RESIDUE: bool(sample.dmap),
         OptionalSlot.INTERACTION: bool(sample.interactions),
         OptionalSlot.SURFACE: bool(sample.mesh),
         OptionalSlot.TM: bool(res_loc),
@@ -111,23 +111,6 @@ def sample_prior_level(
 ) -> PriorLevelSelection:
     """Sample a uniformly distributed requested L0-L4 cumulative prefix."""
     return select_prior_level(available, int(rng.integers(0, 5)))
-
-
-def subsample_true_contacts(edges: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    """Randomly retain contacts while keeping one for every nonempty input."""
-
-    array = np.asarray(edges)
-    if array.ndim == 0:
-        raise ValueError("edges must have a leading edge dimension")
-    if array.shape[0] < 2:
-        return array.copy()
-
-    keep = rng.random(array.shape[0]) < 0.5
-    # A nonempty contact set must remain a nonempty contact set after
-    # augmentation.  The first edge is deterministic and keeps this guarantee
-    # even when all random draws fall below the retention threshold.
-    keep[0] = True
-    return array[keep]
 
 
 def subsample_interactions_by_type(
@@ -195,5 +178,4 @@ __all__ = [
     "sample_prior_level",
     "select_prior_level",
     "subsample_interactions_by_type",
-    "subsample_true_contacts",
 ]

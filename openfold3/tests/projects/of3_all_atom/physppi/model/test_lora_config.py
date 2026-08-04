@@ -6,11 +6,11 @@ from openfold3.projects.of3_all_atom.config.model_config import model_config
 from openfold3.projects.of3_all_atom.model import OpenFold3
 
 
-def test_lora_config_is_always_on_for_physppi_domain_adaptation():
+def test_lora_config_is_disabled_by_default_but_keeps_group_specs():
     cfg = copy.deepcopy(model_config)
 
     assert cfg.settings.training_scope == "baseline"
-    assert cfg.architecture.lora.enabled is True
+    assert cfg.architecture.lora.enabled is False
     assert cfg.architecture.lora.target_patterns == []
     assert cfg.architecture.lora.rank == 8
     assert cfg.architecture.lora.alpha == 16
@@ -64,72 +64,21 @@ def test_lora_disabled_adds_no_lora_modules_or_state_keys():
     assert not any("lora_A" in key or "lora_B" in key for key in state_keys)
 
 
-def test_physppi_assessment_boundary_keeps_lora_enabled_for_mandatory_only():
+def test_physppi_priors_scope_does_not_require_lora():
     cfg = copy.deepcopy(model_config)
     cfg.architecture.physppi.enabled = True
-    cfg.settings.training_scope = "physppi_lora_assessment"
-    cfg.architecture.lora.enabled = True
-    assert cfg.architecture.lora.enabled
-    assert cfg.settings.training_scope == "physppi_lora_assessment"
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("target_preset", "anything_else"),
-        ("init", "anything_else"),
-        ("train_bias", True),
-    ],
-)
-def test_physppi_route_rejects_noncanonical_lora_metadata(field, value):
-    cfg = copy.deepcopy(model_config)
-    cfg.architecture.physppi.enabled = True
-    cfg.settings.training_scope = "physppi_lora_assessment"
+    cfg.settings.training_scope = "physppi_priors_only"
     cfg.architecture.pairformer.no_blocks = 1
-    cfg.architecture.lora[field] = value
+    model = OpenFold3(cfg)
 
-    with pytest.raises(ValueError, match=field):
-        OpenFold3(cfg)
+    assert model.lora_matches == []
+    assert model.physppi_conditioning is not None
 
 
-def test_physppi_route_rejects_noncanonical_lora_group_count():
+def test_physppi_scope_defaults_to_priors_only_in_config_defaults():
     cfg = copy.deepcopy(model_config)
     cfg.architecture.physppi.enabled = True
-    cfg.settings.training_scope = "physppi_lora_assessment"
-    cfg.architecture.pairformer.no_blocks = 1
-    cfg.architecture.lora.groups = [cfg.architecture.lora.groups[0]]
-
-    with pytest.raises(ValueError, match="exactly two LoRA groups"):
-        OpenFold3(cfg)
-
-
-def test_physppi_route_rejects_noncanonical_lora_group_budget():
-    cfg = copy.deepcopy(model_config)
-    cfg.architecture.physppi.enabled = True
-    cfg.settings.training_scope = "physppi_lora_assessment"
-    cfg.architecture.pairformer.no_blocks = 1
-    cfg.architecture.lora.groups[0]["max_trainable_lora_params"] = 200_000
-
-    with pytest.raises(ValueError, match="max_trainable_lora_params"):
-        OpenFold3(cfg)
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("exclude_patterns", [r"pairformer_stack\.blocks\.47"]),
-        ("unexpected_field", "changes-the-contract"),
-    ],
-)
-def test_physppi_route_rejects_noncanonical_lora_group_fields(field, value):
-    cfg = copy.deepcopy(model_config)
-    cfg.architecture.physppi.enabled = True
-    cfg.settings.training_scope = "physppi_lora_assessment"
-    cfg.architecture.pairformer.no_blocks = 1
-    cfg.architecture.lora.groups[1][field] = value
-
-    with pytest.raises(ValueError, match=field):
-        OpenFold3(cfg)
+    assert cfg.settings.training_scope == "baseline"
 
 
 @pytest.mark.parametrize(
@@ -142,7 +91,7 @@ def test_physppi_route_statically_rejects_forbidden_assessment_keys(
 ):
     cfg = copy.deepcopy(model_config)
     cfg.architecture.physppi.enabled = True
-    cfg.settings.training_scope = "physppi_lora_assessment"
+    cfg.settings.training_scope = "physppi_priors_only"
     cfg.architecture.pairformer.no_blocks = 1
     if placement == "head_key":
         cfg.architecture.heads[forbidden_name] = {"enabled": False}
@@ -163,7 +112,7 @@ def test_physppi_route_rejects_forbidden_keys_nested_in_sequences(
 ):
     cfg = copy.deepcopy(model_config)
     cfg.architecture.physppi.enabled = True
-    cfg.settings.training_scope = "physppi_lora_assessment"
+    cfg.settings.training_scope = "physppi_priors_only"
     cfg.architecture.pairformer.no_blocks = 1
     section = getattr(cfg.architecture, section_name)
     section["nested_contract_probe"] = [{forbidden_name: False}]

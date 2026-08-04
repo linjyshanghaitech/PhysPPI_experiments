@@ -64,7 +64,7 @@ def test_physppi_configs_use_canonical_roots_and_reject_legacy_fields(tmp_path):
     assert isinstance(q_spec.config.physppi, QBioLiP10kSettings)
     assert isinstance(af_spec.config.physppi, AFDB10kSettings)
     assert q_spec.config.physppi.num_surface_neighbors == PHYSPPI_SURFACE_NEIGHBORS
-    assert af_spec.config.physppi.num_surface_neighbors == 128
+    assert af_spec.config.physppi.num_surface_neighbors == 64
 
     for config_class in (QBioLiP10kConfig, AFDB10kConfig):
         with pytest.raises(ValueError, match="extra|pkl_directory"):
@@ -132,7 +132,7 @@ def test_physppi_training_yaml_declares_canonical_mixture_and_loss():
             "spatial": 0.5,
             "spatial_interface": 0.5,
         }
-        assert entry["config"]["physppi"]["num_surface_neighbors"] == 128
+        assert entry["config"]["physppi"]["num_surface_neighbors"] == 64
         loss = entry["config"]["loss"]
         assert loss["confidence_loss_names"] == ["plddt", "pde", "pae"]
         assert loss["loss_weights"]["experimentally_resolved"] == 0.0

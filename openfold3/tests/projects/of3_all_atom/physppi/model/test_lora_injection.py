@@ -78,7 +78,7 @@ def test_lora_parameter_names_requires_exact_parameter_leaf_names():
 def test_lora_target_names_are_not_gated_by_optional_prior_state():
     cfg = copy.deepcopy(model_config)
     cfg.architecture.physppi.enabled = True
-    cfg.settings.training_scope = "physppi_lora_assessment"
+    cfg.settings.training_scope = "physppi_priors_only"
     cfg.architecture.lora.enabled = True
     cfg.architecture.pairformer.no_blocks = 1
     model = OpenFold3(cfg)

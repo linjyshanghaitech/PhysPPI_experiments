@@ -143,25 +143,25 @@ def _valid_features() -> dict[str, object]:
         "physppi_token_center_atom_index": torch.tensor([1, 3]),
         "physppi_backbone_atom_indices": torch.tensor([[0, 1, 0], [2, 3, 2]]),
         "physppi_backbone_frame_mask": torch.ones(n_tokens, dtype=torch.bool),
-        "physppi_contact_pair_mask": torch.zeros(
-            (n_tokens, n_tokens), dtype=torch.bool
+        "physppi_interface_residue_mask": torch.zeros(
+            (n_tokens,), dtype=torch.bool
         ),
         "physppi_interaction_type_mask": torch.zeros(
-            (n_tokens, n_tokens, 7), dtype=torch.bool
+            (n_tokens, n_tokens, 5), dtype=torch.bool
         ),
         "physppi_interaction_distance": torch.zeros((n_tokens, n_tokens)),
         "physppi_interaction_aux_valid": torch.zeros(
             (n_tokens, n_tokens), dtype=torch.bool
         ),
-        "physppi_surface_local_coords": torch.zeros((n_tokens, 128, 3)),
-        "physppi_surface_features": torch.zeros((n_tokens, 128, 6)),
-        "physppi_surface_mask": torch.zeros((n_tokens, 128), dtype=torch.bool),
-        "physppi_surface_charge_mask": torch.zeros((n_tokens, 128), dtype=torch.bool),
+        "physppi_surface_local_coords": torch.zeros((n_tokens, 64, 3)),
+        "physppi_surface_features": torch.zeros((n_tokens, 64, 6)),
+        "physppi_surface_mask": torch.zeros((n_tokens, 64), dtype=torch.bool),
+        "physppi_surface_charge_mask": torch.zeros((n_tokens, 64), dtype=torch.bool),
         "physppi_prior_requested_level": torch.tensor(4),
         "physppi_prior_effective_level": torch.tensor(4),
         "physppi_occurrence_seed": torch.tensor(7, dtype=torch.uint64),
     }
-    for slot in ("contact", "interaction", "surface", "tm"):
+    for slot in ("interface_residue", "interaction", "surface", "tm"):
         for state in ("available", "selected", "valid", "provenance", "active"):
             features[f"physppi_{slot}_{state}"] = torch.tensor(True)
     return features
@@ -202,18 +202,18 @@ def _run_preflight_fixture(case: FixtureCase) -> list[Finding]:
 def _run_collator_fixture() -> list[Finding]:
     n_tokens = 2
     batch = {
-        "physppi_surface_local_coords": torch.zeros((1, n_tokens, 128, 3)),
-        "physppi_surface_features": torch.zeros((1, n_tokens, 128, 6)),
-        "physppi_surface_mask": torch.zeros((1, n_tokens, 128), dtype=torch.bool),
+        "physppi_surface_local_coords": torch.zeros((1, n_tokens, 64, 3)),
+        "physppi_surface_features": torch.zeros((1, n_tokens, 64, 6)),
+        "physppi_surface_mask": torch.zeros((1, n_tokens, 64), dtype=torch.bool),
         "physppi_surface_charge_mask": torch.zeros(
-            (1, n_tokens, 128), dtype=torch.bool
+            (1, n_tokens, 64), dtype=torch.bool
         ),
         "physppi_paired_msa_chain_mask": torch.ones((1, 2), dtype=torch.bool),
-        "physppi_contact_pair_mask": torch.zeros(
-            (1, n_tokens, n_tokens), dtype=torch.bool
+        "physppi_interface_residue_mask": torch.zeros(
+            (1, n_tokens), dtype=torch.bool
         ),
         "physppi_interaction_type_mask": torch.zeros(
-            (1, n_tokens, n_tokens, 7), dtype=torch.bool
+            (1, n_tokens, n_tokens, 5), dtype=torch.bool
         ),
         "physppi_interaction_distance": torch.zeros((1, n_tokens, n_tokens)),
         "physppi_interaction_aux_valid": torch.zeros((1, n_tokens), dtype=torch.bool),

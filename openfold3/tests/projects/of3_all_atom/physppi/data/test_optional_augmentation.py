@@ -13,7 +13,6 @@ from openfold3.projects.of3_all_atom.physppi.data.priors.augmentation import (
     sample_prior_level,
     select_prior_level,
     subsample_interactions_by_type,
-    subsample_true_contacts,
 )
 
 
@@ -25,10 +24,10 @@ def all_available() -> dict[OptionalSlot, bool]:
     ("requested", "expected"),
     [
         (0, ()),
-        (1, ("contact",)),
-        (2, ("contact", "interaction")),
-        (3, ("contact", "interaction", "surface")),
-        (4, ("contact", "interaction", "surface", "tm")),
+        (1, ("interface_residue",)),
+        (2, ("interface_residue", "interaction")),
+        (3, ("interface_residue", "interaction", "surface")),
+        (4, ("interface_residue", "interaction", "surface", "tm")),
     ],
 )
 def test_requested_level_is_a_cumulative_prefix(requested, expected):
@@ -84,25 +83,6 @@ def test_slot_state_is_immutable():
     state = SlotState(True, True, True, "qbiolip10k")
     with pytest.raises(FrozenInstanceError):
         state.selected = False
-
-
-def test_subsample_true_contacts_preserves_one_nonempty_contact():
-    edges = np.arange(20, dtype=np.int64).reshape(10, 2)
-    out = subsample_true_contacts(edges, np.random.default_rng(1))
-    assert out.shape[0] >= 1
-    assert any(np.array_equal(row, edges[0]) for row in out)
-    assert np.array_equal(edges, np.arange(20, dtype=np.int64).reshape(10, 2))
-
-
-def test_subsample_true_contacts_empty_and_singleton():
-    empty = np.empty((0, 2), dtype=np.int64)
-    singleton = np.asarray([[3, 8]], dtype=np.int64)
-    assert np.array_equal(
-        subsample_true_contacts(empty, np.random.default_rng(1)), empty
-    )
-    assert np.array_equal(
-        subsample_true_contacts(singleton, np.random.default_rng(1)), singleton
-    )
 
 
 def test_subsample_interactions_preserves_each_type_and_is_reproducible():

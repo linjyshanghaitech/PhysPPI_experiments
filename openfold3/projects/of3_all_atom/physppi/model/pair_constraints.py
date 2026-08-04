@@ -7,7 +7,7 @@ from torch import nn
 
 
 class InteractionPairEncoder(nn.Module):
-    """Project seven symmetric interaction channels into pair state."""
+    """Project five typed symmetric interaction channels into pair state."""
 
     def __init__(self, c_z: int = 128, num_interaction_types: int = 5) -> None:
         super().__init__()

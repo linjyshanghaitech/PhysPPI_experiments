@@ -150,13 +150,13 @@ def test_restricted_optional_availability_matches_filtered_payloads(tmp_path: Pa
     disconnected = module.restrict_prior_sample_to_chains(sample, ("B", "D"))
 
     assert module.PhysPPIPriorComplexDatasetAdapter._available_slots(connected) == {
-        OptionalSlot.CONTACT: True,
+        OptionalSlot.INTERFACE_RESIDUE: True,
         OptionalSlot.INTERACTION: True,
         OptionalSlot.SURFACE: True,
         OptionalSlot.TM: True,
     }
     assert module.PhysPPIPriorComplexDatasetAdapter._available_slots(disconnected) == {
-        OptionalSlot.CONTACT: False,
+        OptionalSlot.INTERFACE_RESIDUE: False,
         OptionalSlot.INTERACTION: False,
         OptionalSlot.SURFACE: True,
         OptionalSlot.TM: True,

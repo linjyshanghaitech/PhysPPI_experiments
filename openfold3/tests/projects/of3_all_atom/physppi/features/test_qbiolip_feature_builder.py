@@ -7,8 +7,8 @@ from openfold3.projects.of3_all_atom.physppi.data.readers.qbiolip10k import (
     InteractionRecord,
 )
 from openfold3.projects.of3_all_atom.physppi.features import (
-    build_contact_features,
     build_interaction_features,
+    build_interface_residue_features,
     build_membrane_target,
     build_surface_features,
     build_tm_features,
@@ -25,23 +25,25 @@ def _atom_array(rows: list[tuple[str, int, str, str, tuple[float, float, float]]
     return atoms
 
 
-def test_contact_reduces_cross_chain_dmap_to_symmetric_pair_mask_only():
+def test_interface_residue_reduces_cross_chain_dmap_to_per_token_mask():
     token_index = {("A", 1): 0, ("B", 2): 1}
-    contact = build_contact_features(
+    interface = build_interface_residue_features(
         {"A|B": ((1, 2, 9.0), (1, 2, 17.0))}, token_index, 10.0
     )
     interaction = build_interaction_features((), token_index)
 
-    assert contact["available"] is True
-    assert contact["valid"] is True
-    assert contact["pair_mask"].dtype == np.bool_
-    assert contact["pair_mask"].shape == (2, 2)
-    assert contact["pair_mask"].tolist() == [[False, True], [True, False]]
-    assert contact["cutoff"] == 10.0
-    assert "mask" not in contact
-    assert "surface_interface_mask" not in contact
-    narrow = build_contact_features({"A|B": ((1, 2, 9.0),)}, token_index, 8.0)
-    assert not narrow["pair_mask"].any()
+    assert interface["available"] is True
+    assert interface["valid"] is True
+    assert interface["interface_mask"].dtype == np.bool_
+    assert interface["interface_mask"].shape == (2,)
+    assert interface["interface_mask"].tolist() == [True, True]
+    assert interface["cutoff"] == 10.0
+    assert "pair_mask" not in interface
+    assert "surface_interface_mask" not in interface
+    narrow = build_interface_residue_features(
+        {"A|B": ((1, 2, 9.0),)}, token_index, 8.0
+    )
+    assert not narrow["interface_mask"].any()
     assert narrow["valid"] is False
     assert narrow["cutoff"] == 8.0
     assert interaction["available"] is False
@@ -54,11 +56,11 @@ def test_empty_interactions_are_unavailable_not_negative():
 
     assert result["available"] is False
     assert result["valid"] is False
-    assert result["type_mask"].shape == (0, 0, 7)
+    assert result["type_mask"].shape == (0, 0, 5)
     assert result["aux"] == ()
 
 
-def test_interaction_has_seven_symmetric_channels_and_drops_invalid_endpoints():
+def test_interaction_has_five_symmetric_channels_and_drops_invalid_endpoints():
     token_index = {("A", 1): 0, ("B", 2): 1}
     records = (
         InteractionRecord("A|B", 1, 2, "hbond", 2.5, "NZ", "O"),
@@ -68,7 +70,7 @@ def test_interaction_has_seven_symmetric_channels_and_drops_invalid_endpoints():
 
     assert result["available"] is True
     assert result["valid"] is True
-    assert result["type_mask"].shape == (2, 2, 7)
+    assert result["type_mask"].shape == (2, 2, 5)
     assert result["type_mask"][0, 1, 0]
     assert result["type_mask"][1, 0, 0]
     assert not result["type_mask"][..., 1].any()

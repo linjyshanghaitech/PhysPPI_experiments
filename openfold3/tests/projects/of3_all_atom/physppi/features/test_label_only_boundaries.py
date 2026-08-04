@@ -38,12 +38,12 @@ def _single_residue_atom_array() -> AtomArray:
     return atoms
 
 
-def test_prior_builder_exposes_pair_contacts_and_directed_membrane_labels_only():
+def test_prior_builder_exposes_interface_residues_and_directed_membrane_labels_only():
     import openfold3.core.data.framework.single_datasets.afdb10k  # noqa: F401
     from openfold3.projects.of3_all_atom.physppi.data.adapters import _runtime as module
 
     adapter = object.__new__(module.PhysPPIPriorComplexDatasetAdapter)
-    adapter.physppi = SimpleNamespace(num_surface_neighbors=128)
+    adapter.physppi = SimpleNamespace(num_surface_neighbors=64)
     sample = SimpleNamespace(
         dmap={"A|B": ((1, 1, 7.0),)},
         interactions=(),
@@ -67,9 +67,9 @@ def test_prior_builder_exposes_pair_contacts_and_directed_membrane_labels_only()
         n_tokens=2,
     )
 
-    assert result["physppi_contact_pair_mask"].shape == (2, 2)
-    assert result["physppi_contact_pair_mask"].dtype == torch.bool
-    assert "physppi_contact_cutoff" not in result
+    assert result["physppi_interface_residue_mask"].shape == (2,)
+    assert result["physppi_interface_residue_mask"].dtype == torch.bool
+    assert "physppi_interface_residue_cutoff" not in result
     assert LEGACY_MODEL_INPUT_KEYS.isdisjoint(result)
     assert result["physppi_membrane_gt_valid"]
     assert np.allclose(result["physppi_membrane_gt_normal"], [0.0, 0.0, 1.0])
@@ -79,8 +79,8 @@ def test_prior_builder_exposes_pair_contacts_and_directed_membrane_labels_only()
 def test_physppi_feature_shapes_declare_only_strict_boundary_fields():
     shapes = feature_dict.feat
 
-    assert shapes["physppi_contact_pair_mask"] == [NUM_TOKENS, NUM_TOKENS]
-    assert "physppi_contact_cutoff" not in shapes
+    assert shapes["physppi_interface_residue_mask"] == [NUM_TOKENS]
+    assert "physppi_interface_residue_cutoff" not in shapes
     assert shapes["physppi_prior_requested_level"] == []
     assert shapes["physppi_prior_effective_level"] == []
     assert shapes["physppi_occurrence_seed"] == []

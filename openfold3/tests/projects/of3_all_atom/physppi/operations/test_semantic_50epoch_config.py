@@ -240,7 +240,7 @@ def _assert_common(config: dict[str, object], manifest: Path) -> None:
         "log_every_n_steps": 10,
     }
     settings = config["model_update"]["custom"]["settings"]
-    assert settings["training_scope"] == "physppi_lora_assessment"
+    assert settings["training_scope"] == "physppi_priors_only"
     assert settings["optimizer"] == {
         "learning_rate": 5.0e-5,
         "beta1": 0.9,
@@ -312,7 +312,7 @@ def _assert_common(config: dict[str, object], manifest: Path) -> None:
         assert dataset_config["physppi"]["manifest"] == str(manifest)
         assert dataset_config["physppi"]["manifest_dataset_key"] == key
         assert dataset_config["physppi"]["manifest_partition"] == "train_ids"
-        assert dataset_config["physppi"]["num_surface_neighbors"] == 128
+        assert dataset_config["physppi"]["num_surface_neighbors"] == 64
         assert dataset_config["loss"] == {
             "confidence_loss_names": ["plddt", "pde", "pae"],
             "loss_weights": {"experimentally_resolved": 0.0, "pde": 1.0e-4},

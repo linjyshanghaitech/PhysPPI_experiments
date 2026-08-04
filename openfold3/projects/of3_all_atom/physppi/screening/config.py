@@ -18,7 +18,7 @@ from openfold3.projects.of3_all_atom.physppi.screening.models import (
 )
 
 TOKEN_BUDGET = 768
-SURFACE_NEIGHBORS = 128
+SURFACE_NEIGHBORS = 64
 
 
 def _source_index(dataset: DatasetName, options: ScreeningOptions) -> Path:

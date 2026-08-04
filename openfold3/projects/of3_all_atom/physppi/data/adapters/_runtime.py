@@ -109,8 +109,8 @@ from openfold3.projects.of3_all_atom.physppi.data.priors.schema import (
 )
 from openfold3.projects.of3_all_atom.physppi.features import (
     PhysPPIDataError,
-    build_contact_features,
     build_interaction_features,
+    build_interface_residue_features,
     build_membrane_target,
     build_surface_features,
     build_tm_features,
@@ -130,7 +130,7 @@ from experiments.pdb_cache.pdb_adapter import (
     load_atomarray_from_pt as _load_atomarray_from_pt,
 )
 from experiments.residue_prior.residue_adapter import (
-    build_contact_from_precomputed as _build_contact_from_pt,
+    build_interface_residue_from_precomputed as _build_interface_residue_from_pt,
     build_interaction_from_precomputed as _build_interaction_from_pt,
     build_membrane_target_from_precomputed as _build_membrane_target_from_pt,
     build_tm_from_precomputed as _build_tm_from_pt,
@@ -711,7 +711,7 @@ def _build_residue_priors(
     cutoff: float,
     atom_array,
 ):
-    """Build contact/interaction/membrane features from precomputed .pt files.
+    """Build interface/interaction/membrane features from precomputed .pt files.
 
     PhysPPI modification (Jinyu Lin, ShanghaiTech):
     Each prior is independently loaded from its .pt.  If a .pt is missing
@@ -721,7 +721,7 @@ def _build_residue_priors(
     import logging
     logger = logging.getLogger(__name__)
 
-    contact = None
+    interface = None
     interaction = None
     tm_mask = None
     membrane = None
@@ -730,7 +730,9 @@ def _build_residue_priors(
     pt_path = _derive_pt_path(adapter, sample, "interface_residues.pt")
     if pt_path is not None and pt_path.exists():
         try:
-            contact = _build_contact_from_pt(pt_path, token_index, cutoff)
+            interface = _build_interface_residue_from_pt(
+                pt_path, token_index, cutoff
+            )
         except Exception as exc:
             if _using_precomputed_root(adapter):
                 raise PhysPPIDataError(
@@ -777,7 +779,7 @@ def _build_residue_priors(
                 sample.sample_id, exc_info=True,
             )
 
-    return contact, interaction, tm_mask, membrane
+    return interface, interaction, tm_mask, membrane
 
 
 from openfold3.projects.of3_all_atom.physppi.model.interaction_auxiliary import (
@@ -1846,7 +1848,7 @@ def _pad_prior_payloads_to_token_count(
                 f"{name} has {actual_n_tokens} tokens, exceeding model budget "
                 f"{n_tokens}"
             )
-        is_pair_payload = name in {"contact", "interaction"} and value.ndim >= 2
+        is_pair_payload = name in {"interaction"} and value.ndim >= 2
         if is_pair_payload:
             if value.shape[1] != actual_n_tokens:
                 raise ValueError(
@@ -2026,7 +2028,7 @@ class _AuditPriorViewOverride:
     """Screening-only deterministic optional-prior view."""
 
     requested_level: int
-    contact_cutoff: float
+    interface_cutoff: float
 
 
 class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
@@ -2047,18 +2049,18 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
 
     @contextmanager
     def audit_prior_view(
-        self, *, requested_level: int, contact_cutoff: float
+        self, *, requested_level: int, interface_cutoff: float
     ) -> Iterator[None]:
         """Temporarily force one screening-only optional-prior audit view."""
         if getattr(self, "_physppi_audit_view_override", None) is not None:
             raise RuntimeError("PhysPPI audit prior view is already active")
         if requested_level not in range(5):
             raise ValueError("requested_level must be in [0, 4]")
-        if not np.isfinite(contact_cutoff) or not 8.0 <= contact_cutoff <= 18.0:
-            raise ValueError("contact_cutoff must be finite and in [8.0, 18.0]")
+        if not np.isfinite(interface_cutoff) or not 8.0 <= interface_cutoff <= 18.0:
+            raise ValueError("interface_cutoff must be finite and in [8.0, 18.0]")
         self._physppi_audit_view_override = _AuditPriorViewOverride(
             requested_level=requested_level,
-            contact_cutoff=float(contact_cutoff),
+            interface_cutoff=float(interface_cutoff),
         )
         try:
             yield
@@ -2078,11 +2080,11 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
         )
         return select_prior_level(available, requested_level)
 
-    def _select_contact_cutoff(self, rng: np.random.Generator) -> float:
+    def _select_interface_cutoff(self, rng: np.random.Generator) -> float:
         """Select a production cutoff, with an audit-only deterministic override."""
         sampled_cutoff = float(rng.uniform(8.0, 18.0))
         override = getattr(self, "_physppi_audit_view_override", None)
-        return override.contact_cutoff if override is not None else sampled_cutoff
+        return override.interface_cutoff if override is not None else sampled_cutoff
 
     def _ccd_for_atom_array(self, atom_array: AtomArray):
         """Load the official CCD only for samples needing a nonstatic residue."""
@@ -2571,17 +2573,17 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
         if n_tokens is None:
             n_tokens = len(token_index)
         # PhysPPI residue priors (Jinyu Lin, ShanghaiTech):
-        #   Prefer pre-computed .pt files for contact/interaction/membrane.
+        #   Prefer pre-computed .pt files for interface/interaction/membrane.
         #   Each prior independently falls back to the original builder.
-        contact_cutoff = self._select_contact_cutoff(rng)
-        pt_contact, pt_interaction, pt_tm, pt_membrane = _build_residue_priors(
-            self, sample, token_index, contact_cutoff, atom_array,
+        interface_cutoff = self._select_interface_cutoff(rng)
+        pt_interface, pt_interaction, pt_tm, pt_membrane = _build_residue_priors(
+            self, sample, token_index, interface_cutoff, atom_array,
         )
-        if pt_contact is not None:
-            contact = pt_contact
+        if pt_interface is not None:
+            interface = pt_interface
         else:
-            contact = build_contact_features(
-                sample.dmap, token_index, cutoff=contact_cutoff,
+            interface = build_interface_residue_features(
+                sample.dmap, token_index, cutoff=interface_cutoff,
             )
         if pt_interaction is not None:
             interaction = pt_interaction
@@ -2622,7 +2624,9 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
 
         padded_payloads = _pad_prior_payloads_to_token_count(
             {
-                "contact": np.asarray(contact["pair_mask"], dtype=bool),
+                "interface_residue": np.asarray(
+                    interface["interface_mask"], dtype=bool
+                ),
                 "interaction": np.asarray(interaction["type_mask"], dtype=bool),
                 "surface_coords": np.asarray(surf_coords, dtype=np.float32),
                 "surface_features": np.asarray(surf_feats, dtype=np.float32),
@@ -2637,8 +2641,9 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
             if pt_membrane is not None
             else build_membrane_target(sample.opm, bool(tm_mask.any()))
         )
-        states[OptionalSlot.CONTACT] = replace(
-            states[OptionalSlot.CONTACT], valid=bool(contact["valid"])
+        states[OptionalSlot.INTERFACE_RESIDUE] = replace(
+            states[OptionalSlot.INTERFACE_RESIDUE],
+            valid=bool(interface["valid"]),
         )
         states[OptionalSlot.INTERACTION] = replace(
             states[OptionalSlot.INTERACTION], valid=bool(interaction["valid"])
@@ -2653,8 +2658,8 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
         result = _slot_state_features(states)
         result.update(
             {
-                "physppi_contact_pair_mask": torch.from_numpy(
-                    padded_payloads["contact"]
+                "physppi_interface_residue_mask": torch.from_numpy(
+                    padded_payloads["interface_residue"]
                 ),
                 "physppi_interaction_type_mask": torch.from_numpy(
                     padded_payloads["interaction"]
@@ -2755,7 +2760,7 @@ class PhysPPIPriorComplexDatasetAdapter(BaseOF3Dataset):
             atom_array,
             token_index,
             selection.states,
-            occurrence_rng.contact,
+            occurrence_rng.interface_residue,
             int(features["token_mask"].shape[0]),
             input_atom_array=input_atom_array,
         )

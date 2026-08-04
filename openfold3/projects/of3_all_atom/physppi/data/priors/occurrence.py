@@ -26,7 +26,7 @@ class OccurrenceRNG:
 
     seed: int
     slots: np.random.Generator
-    contact: np.random.Generator
+    interface_residue: np.random.Generator
     interaction: np.random.Generator
     surface: np.random.Generator
     tm: np.random.Generator

@@ -209,7 +209,9 @@ def materialize_sampler_prefix(
                     "sample_id": sample_id,
                     "occurrence_seed": occurrence_rng.seed,
                     "requested_level": int(occurrence_rng.slots.integers(0, 5)),
-                    "contact_cutoff": float(occurrence_rng.contact.uniform(8.0, 18.0)),
+                    "interface_cutoff": float(
+                        occurrence_rng.interface_residue.uniform(8.0, 18.0)
+                    ),
                 }
             )
         rows_by_rank[rank] = rows
@@ -268,7 +270,7 @@ def verify_sampler_prefix(
         "sample_id",
         "occurrence_seed",
         "requested_level",
-        "contact_cutoff",
+        "interface_cutoff",
     )
     effective_levels: set[int] = set()
     for rank, expected_rows in expected_formal.items():
@@ -287,7 +289,7 @@ def verify_sampler_prefix(
             strict=True,
         ):
             for field in compared_fields:
-                if field == "contact_cutoff":
+                if field == "interface_cutoff":
                     matches = math.isclose(
                         float(actual[field]),
                         float(expected[field]),

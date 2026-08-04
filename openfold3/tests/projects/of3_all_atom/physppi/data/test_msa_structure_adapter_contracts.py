@@ -152,7 +152,7 @@ def _install_structure_adapter_stubs(monkeypatch):
         },
         "openfold3.projects.of3_all_atom.physppi.features": {
             "PhysPPIDataError": ValueError,
-            "build_contact_features": lambda *args, **kwargs: {},
+            "build_interface_residue_features": lambda *args, **kwargs: {},
             "build_interaction_features": lambda *args, **kwargs: {},
             "build_membrane_target": lambda *args, **kwargs: {},
             "build_surface_features": lambda *args, **kwargs: {},

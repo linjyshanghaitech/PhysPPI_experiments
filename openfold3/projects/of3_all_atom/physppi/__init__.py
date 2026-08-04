@@ -4,8 +4,8 @@ from openfold3.projects.of3_all_atom.physppi.model.conditioning import (
     OptionalPriorConditioner,
     OptionalPriorOutput,
 )
-from openfold3.projects.of3_all_atom.physppi.model.contact_encoder import (
-    ContactPairEncoder,
+from openfold3.projects.of3_all_atom.physppi.model.interface_residue_encoder import (
+    InterfaceResidueEncoder,
 )
 from openfold3.projects.of3_all_atom.physppi.model.interaction_auxiliary import (
     InteractionDistanceHead,
@@ -30,8 +30,8 @@ __all__ = [
     "DirectedMembranePlaneEstimator",
     "DirectedPlanePrediction",
     "MembraneDiffusionConditioner",
-    "ContactPairEncoder",
     "InteractionPairEncoder",
+    "InterfaceResidueEncoder",
     "OptionalPriorConditioner",
     "OptionalPriorOutput",
     "SurfaceTokenEncoder",

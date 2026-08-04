@@ -21,16 +21,16 @@ LEGACY_PHYS_PPI_MODEL_INPUT_KEYS = frozenset(
     }
 )
 
-AUDIT_ONLY_PHYS_PPI_KEYS = frozenset({"physppi_contact_cutoff"})
+AUDIT_ONLY_PHYS_PPI_KEYS = frozenset({"physppi_interface_residue_cutoff"})
 
 PHYS_PPI_KEYS = frozenset(
     {
-        "physppi_contact_available",
-        "physppi_contact_selected",
-        "physppi_contact_valid",
-        "physppi_contact_provenance",
-        "physppi_contact_active",
-        "physppi_contact_pair_mask",
+        "physppi_interface_residue_available",
+        "physppi_interface_residue_selected",
+        "physppi_interface_residue_valid",
+        "physppi_interface_residue_provenance",
+        "physppi_interface_residue_active",
+        "physppi_interface_residue_mask",
         "physppi_paired_msa_chain_mask",
         "physppi_interaction_available",
         "physppi_interaction_selected",
@@ -70,11 +70,11 @@ PHYS_PPI_KEYS = frozenset(
 )
 
 _SLOTS = {
-    "contact": (
-        "physppi_contact_available",
-        "physppi_contact_selected",
-        "physppi_contact_valid",
-        "physppi_contact_active",
+    "interface_residue": (
+        "physppi_interface_residue_available",
+        "physppi_interface_residue_selected",
+        "physppi_interface_residue_valid",
+        "physppi_interface_residue_active",
     ),
     "interaction": (
         "physppi_interaction_available",
@@ -216,7 +216,7 @@ def validate_optional_prior_features(
             continue
         if bool(active.any()):
             payload_keys = {
-                "contact": ("physppi_contact_pair_mask",),
+                "interface_residue": ("physppi_interface_residue_mask",),
                 "interaction": ("physppi_interaction_type_mask",),
                 "surface": (
                     "physppi_surface_local_coords",
@@ -238,21 +238,19 @@ def validate_optional_prior_features(
         if not bool(active.any()):
             continue
 
-        if slot == "contact":
-            value = _payload(batch, "physppi_contact_pair_mask", batch_size, mode)
+        if slot == "interface_residue":
+            value = _payload(
+                batch, "physppi_interface_residue_mask", batch_size, mode
+            )
             if value is not None:
                 if value.dtype != torch.bool:
-                    _issue("physppi_contact_pair_mask must be boolean", mode)
+                    _issue("physppi_interface_residue_mask must be boolean", mode)
                 _shape_check(
                     value,
-                    "physppi_contact_pair_mask",
-                    (n_tokens, n_tokens),
+                    "physppi_interface_residue_mask",
+                    (n_tokens,),
                     mode,
                 )
-                if not torch.equal(value, value.transpose(-2, -1)):
-                    _issue("physppi_contact_pair_mask must be symmetric", mode)
-                if bool(torch.diagonal(value, dim1=-2, dim2=-1).any()):
-                    _issue("physppi_contact_pair_mask diagonal must be false", mode)
         elif slot == "interaction":
             value = _payload(batch, "physppi_interaction_type_mask", batch_size, mode)
             if value is not None:
