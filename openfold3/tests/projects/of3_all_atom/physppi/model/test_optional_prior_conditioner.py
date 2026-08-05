@@ -237,3 +237,18 @@ def test_tm_topology_accepts_active_tokens_under_bfloat16_autocast():
     assert delta.dtype == next(encoder.proj.parameters()).dtype
     assert torch.equal(membrane_on, torch.tensor([True]))
     assert torch.equal(effective, torch.tensor([[True, False, True]]))
+
+
+def test_legacy_output_includes_zero_surface_pair_delta():
+    conditioner = OptionalPriorConditioner(c_s=16, c_z=8)
+    s = torch.zeros(1, 3, 16)
+    z = torch.zeros(1, 3, 3, 8)
+    out = conditioner(
+        s_init=s,
+        z_init=z,
+        batch=_conditioner_batch(active=False),
+        token_mask=torch.ones(1, 3),
+        pair_mask=torch.ones(1, 3, 3),
+    )
+    assert torch.equal(out.surface_pair_delta, z)
+    assert conditioner.surface_pair is None

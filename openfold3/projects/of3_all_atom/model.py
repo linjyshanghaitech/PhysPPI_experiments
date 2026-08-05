@@ -115,6 +115,37 @@ class OpenFold3(nn.Module):
             OptionalPriorConditioner(
                 c_s=self.shared.c_s,
                 c_z=self.shared.c_z,
+                num_interaction_types=int(
+                    prior_conditioner_config.get("num_interaction_types", 5)
+                ),
+                no_heads_single=int(
+                    prior_conditioner_config.get("no_heads_single", 8)
+                ),
+                no_heads_pair=int(
+                    prior_conditioner_config.get("no_heads_pair", 8)
+                ),
+                prior_drop_prob=float(
+                    prior_conditioner_config.get("prior_drop_prob", 0.25)
+                ),
+                pair_attn_chunk=int(
+                    prior_conditioner_config.get("pair_attn_chunk", 1024)
+                ),
+                pair_prior_inter_only=bool(
+                    prior_conditioner_config.get("pair_prior_inter_only", True)
+                ),
+                use_restype=bool(prior_conditioner_config.get("use_restype", True)),
+                encoder_modules={
+                    "interface_residue": prior_conditioner_config.get(
+                        "interface_residue_encoder_module"
+                    ),
+                    "interaction": prior_conditioner_config.get(
+                        "interaction_encoder_module"
+                    ),
+                    "surface": prior_conditioner_config.get(
+                        "surface_encoder_module"
+                    ),
+                    "tm": prior_conditioner_config.get("tm_encoder_module"),
+                },
             )
             if physppi_enabled and prior_conditioner_enabled
             else None

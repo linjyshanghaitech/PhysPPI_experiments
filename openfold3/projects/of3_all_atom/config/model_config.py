@@ -424,6 +424,16 @@ model_config = mlc.ConfigDict(
                 "optional_prior_conditioner": {
                     "enabled": True,
                     "num_interaction_types": 5,
+                    "no_heads_single": 8,
+                    "no_heads_pair": 8,
+                    "prior_drop_prob": 0.25,
+                    "pair_attn_chunk": 1024,
+                    "pair_prior_inter_only": True,
+                    "use_restype": True,
+                    "interface_residue_encoder_module": None,
+                    "interaction_encoder_module": None,
+                    "surface_encoder_module": None,
+                    "tm_encoder_module": None,
                 },
                 "membrane_geometry": {
                     "enabled": True,
