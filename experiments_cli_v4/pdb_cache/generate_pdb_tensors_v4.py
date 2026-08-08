@@ -316,12 +316,12 @@ def _process_one_sample(args: tuple) -> dict[str, Any]:
         chain_ids = sorted(set(str(c) for c in np.unique(raw_input.chain_id)))
         if not chain_ids:
             return {"case_id": case_id, "status": "skipped", "error": "no chains"}
-        ccd = _worker_ccd(raw_input)
 
         gt_pt = output_dir / f"{case_id}_gt.pt"
         if not gt_pt.exists() or force:
             if raw_gt is None:
                 raise ValueError("missing gt pdb")
+            ccd = _worker_ccd(raw_gt)
             gt_aa = process_gt_array(raw_gt, chain_ids, ccd)
             save_atomarray_as_pt(gt_aa, gt_pt)
 
@@ -331,6 +331,7 @@ def _process_one_sample(args: tuple) -> dict[str, Any]:
                 continue
             mask = np.asarray(raw_input.chain_id).astype(str) == chain_id
             raw_chain = raw_input[mask]
+            ccd = _worker_ccd(raw_chain)
             mono_aa = process_monomer_array(raw_chain, case_id, ccd)
             save_atomarray_as_pt(mono_aa, mono_pt)
 
@@ -441,6 +442,9 @@ def main() -> None:
         }
 
     if args.num_workers <= 1:
+        # Sequential mode has no Pool initializer; set the worker-global CCD
+        # path explicitly so _worker_ccd() can lazy-load it when needed.
+        _init_worker(str(args.ccd_file) if args.ccd_file is not None else None)
         results = map(_run, flat_tasks)
     else:
         with Pool(
