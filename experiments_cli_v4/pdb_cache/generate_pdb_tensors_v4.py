@@ -21,9 +21,11 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import os
 import pickle
 import sys
-from multiprocessing import Pool
+import tempfile
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -97,7 +99,18 @@ def _canonical_atom_names(res_name: str) -> frozenset[str]:
 
 
 def _parse_pdb(path: Path):
-    parsed = parse_pdb_af2(path, allow_malformed_charge=True)
+    try:
+        parsed = parse_pdb_af2(path, allow_malformed_charge=True)
+    except Exception as exc:
+        if "Atom IDs are not strictly increasing" not in str(exc):
+            raise
+        # Some OpenMM-written PDBs have non-monotonic ATOM serials; renumber
+        # them sequentially (coordinates are unchanged) and parse the fixed copy.
+        fixed_path = _renumber_atom_ids(path)
+        try:
+            parsed = parse_pdb_af2(fixed_path, allow_malformed_charge=True)
+        finally:
+            fixed_path.unlink(missing_ok=True)
     if not hasattr(parsed, "atom_array"):
         raise ValueError(f"failed to parse PDB: {path}")
     atom_array = parsed.atom_array
@@ -106,6 +119,22 @@ def _parse_pdb(path: Path):
         if not np.any(occupancy > 0):
             atom_array.occupancy[:] = 1.0
     return atom_array
+
+
+def _renumber_atom_ids(path: Path) -> Path:
+    """Return a temp PDB copy with sequential ATOM/HETATM serial numbers."""
+    lines = path.read_text(errors="replace").splitlines(keepends=True)
+    serial = 0
+    out_lines: list[str] = []
+    for line in lines:
+        if line.startswith(("ATOM", "HETATM")) and len(line) >= 26:
+            serial += 1
+            line = line[:6] + f"{serial:5d}" + line[11:]
+        out_lines.append(line)
+    fd, tmp_name = tempfile.mkstemp(prefix="atomid_fix_", suffix=".pdb")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write("".join(out_lines))
+    return Path(tmp_name)
 
 
 def canonize_atom_array(atom_array, *, ccd=None):
@@ -352,6 +381,14 @@ def _process_one_sample(args: tuple) -> dict[str, Any]:
     return {"case_id": case_id, "status": "ok", "error": None}
 
 
+def _run_sample(task: tuple) -> dict[str, Any]:
+    """Module-level worker for multiprocessing (local closures are not picklable)."""
+    chunk_name = task[-1]
+    result = _process_one_sample(task[:-1])
+    result["chunk"] = chunk_name
+    return result
+
+
 def collect_tasks(
     chunk_dir: Path,
     output_chunk_dir: Path,
@@ -424,12 +461,6 @@ def main() -> None:
         for task in tasks
     ]
 
-    def _run(task: tuple) -> dict[str, Any]:
-        chunk_name = task[-1]
-        result = _process_one_sample(task[:-1])
-        result["chunk"] = chunk_name
-        return result
-
     global_stats: dict[str, Any] = {"chunks": {}}
     for chunk_name in chunk_tasks:
         global_stats["chunks"][chunk_name] = {
@@ -445,14 +476,14 @@ def main() -> None:
         # Sequential mode has no Pool initializer; set the worker-global CCD
         # path explicitly so _worker_ccd() can lazy-load it when needed.
         _init_worker(str(args.ccd_file) if args.ccd_file is not None else None)
-        results = map(_run, flat_tasks)
+        results = map(_run_sample, flat_tasks)
     else:
-        with Pool(
-            processes=args.num_workers,
+        with ProcessPoolExecutor(
+            max_workers=args.num_workers,
             initializer=_init_worker,
             initargs=(str(args.ccd_file) if args.ccd_file is not None else None,),
-        ) as pool:
-            results = pool.imap_unordered(_run, flat_tasks, chunksize=4)
+        ) as executor:
+            results = executor.map(_run_sample, flat_tasks, chunksize=16)
 
     for result in results:
         stats = global_stats["chunks"][result["chunk"]]

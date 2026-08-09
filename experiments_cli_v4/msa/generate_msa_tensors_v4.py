@@ -21,7 +21,7 @@ import gc
 import json
 import sys
 from collections import defaultdict
-from multiprocessing import Pool
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -321,6 +321,14 @@ def _process_one_sample(args: tuple) -> dict[str, Any]:
     return {"case_id": case_id, "status": "ok", "error": None}
 
 
+def _run_sample(task: tuple) -> dict[str, Any]:
+    """Module-level worker for multiprocessing (local closures are not picklable)."""
+    chunk_name = task[-1]
+    result = _process_one_sample(task[:-1])
+    result["chunk"] = chunk_name
+    return result
+
+
 def collect_tasks(
     chunk_dir: Path,
     output_chunk_dir: Path,
@@ -403,12 +411,6 @@ def main() -> None:
         for task in tasks
     ]
 
-    def _run(task: tuple) -> dict[str, Any]:
-        chunk_name = task[-1]
-        result = _process_one_sample(task[:-1])
-        result["chunk"] = chunk_name
-        return result
-
     global_stats: dict[str, Any] = {"chunks": {}}
     for chunk_name in chunk_tasks:
         global_stats["chunks"][chunk_name] = {
@@ -422,10 +424,10 @@ def main() -> None:
         }
 
     if args.num_workers <= 1:
-        results = map(_run, flat_tasks)
+        results = map(_run_sample, flat_tasks)
     else:
-        with Pool(processes=args.num_workers) as pool:
-            results = pool.imap_unordered(_run, flat_tasks, chunksize=4)
+        with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
+            results = executor.map(_run_sample, flat_tasks, chunksize=16)
 
     for result in results:
         stats = global_stats["chunks"][result["chunk"]]
